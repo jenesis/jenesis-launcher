@@ -17,7 +17,6 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
-          submodules: recursive
 
       - name: Resolve release version
         id: version

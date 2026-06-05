@@ -15,11 +15,7 @@
     <build>
         <sourceDirectory>sources</sourceDirectory>
         <testSourceDirectory>tests</testSourceDirectory>
-        <resources>
-            <resource>
-                <directory>resources</directory>
-            </resource>
-        </resources>
+        <resources/>
         <testResources/>
     </build>
 
