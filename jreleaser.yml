@@ -1,0 +1,43 @@
+project:
+  name: jenesis-launcher
+  description: An executable-jar bootstrap that runs nested dependencies in memory, preserving Java modularity.
+  authors: [Rafael Winterhalter]
+  license: Apache-2.0
+  links:
+    homepage: https://github.com/raphw/jenesis-launcher
+  languages:
+    java:
+      groupId: build.jenesis
+      artifactId: build.jenesis.launcher
+      version: '25'
+
+signing:
+  active: ALWAYS
+  pgp:
+    armored: true
+    mode: MEMORY
+
+release:
+  github:
+    owner: raphw
+    name: jenesis-launcher
+    branch: main
+    branchPush: main
+    skipRelease: false
+    skipTag: false
+    tagName: 'v{{projectVersion}}'
+
+files:
+  artifacts:
+    - path: 'target/stage/maven/output/build/jenesis/build.jenesis.launcher/{{projectVersion}}/build.jenesis.launcher-{{projectVersion}}.jar'
+    - path: 'target/stage/maven/output/build/jenesis/build.jenesis.launcher/{{projectVersion}}/build.jenesis.launcher-{{projectVersion}}-sources.jar'
+
+deploy:
+  maven:
+    mavenCentral:
+      sonatype:
+        active: ALWAYS
+        url: https://central.sonatype.com/api/v1/publisher
+        applyMavenCentralRules: true
+        stagingRepositories:
+          - target/stage/maven/output

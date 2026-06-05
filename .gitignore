@@ -1,0 +1,27 @@
+target/
+.jenesis/cache/
+*.hprof
+
+### IntelliJ IDEA ###
+.idea/*
+*.iws
+*.iml
+*.ipr
+
+### Eclipse ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### VS Code ###
+.vscode/
+
+### Mac OS ###
+.DS_Store
+
+### Agent specification ###
+.claude/
