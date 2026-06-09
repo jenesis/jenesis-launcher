@@ -17,12 +17,14 @@ import java.lang.instrument.Instrumentation;
  * <ol>
  *   <li>read {@code application.properties} ({@code mainClass}, optional {@code mainModule}, optional
  *       {@code agentClass}) and the nested jars (see {@link Archive});</li>
- *   <li>build an {@link InMemoryClassLoader} over the {@code classpath/} jars - the in-memory
- *       equivalent of the unnamed module;</li>
- *   <li>if there is a main module, resolve the {@code modulepath/} jars with an
- *       {@link InMemoryModuleFinder} and define a child {@link ModuleLayer} whose single loader has
- *       the class-path loader as its parent, so automatic modules can read the class path while
- *       named modules cannot - the JDK's own rule;</li>
+ *   <li>build a single {@link InMemoryClassLoader} over the {@code classpath/} jars (its unnamed module);</li>
+ *   <li>if there are {@code modulepath/} jars, resolve them with an {@link InMemoryModuleFinder} and
+ *       define a child {@link ModuleLayer} whose modules are all mapped to that same loader - so one
+ *       loader hosts the named modules and the unnamed module together, just as
+ *       {@code java -p modulepath -cp classpath} does. Automatic modules read the class path while named
+ *       modules cannot, and a package owned by a module shadows the same package on the class path - the
+ *       JDK's own rules. This happens regardless of whether a {@code mainModule} is declared, so a
+ *       non-modular application can still reach module-path code;</li>
  *   <li>invoke {@code premain} on each agent named by {@code agentClass}, before the main class is
  *       loaded, so a transformer they register still sees it being defined - exactly as
  *       {@code -javaagent} would (see {@link LauncherAgent} for how the {@link Instrumentation} is
@@ -56,45 +58,47 @@ public final class Launcher {
                     + " of " + location);
         }
 
-        InMemoryClassLoader classpath = new InMemoryClassLoader(
-                archive.classpath(), ClassLoader.getSystemClassLoader());
-
-        ClassLoader context;
-        if (mainModule != null && !mainModule.isBlank() && !archive.modulepath().isEmpty()) {
+        ClassLoader system = ClassLoader.getSystemClassLoader();
+        InMemoryClassLoader loader;
+        ModuleLayer.Controller controller = null;
+        ModuleLayer layer = null;
+        if (!archive.modulepath().isEmpty()) {
+            // One loader hosts the class-path jars (its unnamed module) and the module-path jars (defined
+            // to it as named modules), mirroring `java -p modulepath -cp classpath`, where a single
+            // application loader hosts both. The layer is built whenever there are modules, even without a
+            // main module, so a non-modular application can still reach module-path code (e.g. agents).
             InMemoryModuleFinder finder = new InMemoryModuleFinder(archive.modulepath());
             java.lang.module.Configuration configuration = ModuleLayer.boot().configuration()
                     .resolveAndBind(finder, ModuleFinder.of(), finder.moduleNames());
-            // The static factory returns a Controller, the supported handle a layer creator uses to
-            // break encapsulation of the modules it just defined. The single loader has the class-path
-            // loader as its parent, so automatic modules can read the class path but named ones cannot.
-            ModuleLayer.Controller controller = ModuleLayer.defineModulesWithOneLoader(
-                    configuration, List.of(ModuleLayer.boot()), classpath);
-            ModuleLayer layer = controller.layer();
-            ClassLoader loader = layer.findLoader(mainModule);
-            if (loader == null) {
-                throw new IllegalStateException("Main module not found on the module path: " + mainModule);
-            }
-            // Reproduce `java -m <module>/<class>`, which invokes main without requiring its package to
-            // be exported: grant this launcher access to the main package through the controller. This
-            // is done from the declared module and class name rather than the loaded class, so it can
-            // happen before any agent runs and before the main class is defined.
-            Module application = layer.findModule(mainModule).orElseThrow();
+            // Resolve and construct the loader first: defineModules records each module's packages against
+            // the loader, after which class loading may begin. The returned Controller is the supported
+            // handle a layer creator uses to break encapsulation of the modules it just defined.
+            loader = new InMemoryClassLoader(archive.classpath(), finder, system);
+            controller = ModuleLayer.defineModules(configuration, List.of(ModuleLayer.boot()), _ -> loader);
+            layer = controller.layer();
+        } else {
+            loader = new InMemoryClassLoader(archive.classpath(), null, system);
+        }
+
+        if (controller != null && mainModule != null && !mainModule.isBlank()) {
+            // Reproduce `java -m <module>/<class>`, which invokes main without requiring its package to be
+            // exported: grant this launcher access to the main package through the controller, derived from
+            // the declared module and class name so it happens before the main class is defined.
+            Module application = layer.findModule(mainModule).orElseThrow(() ->
+                    new IllegalStateException("Main module not found on the module path: " + mainModule));
             String packageName = packageOf(mainClass);
             if (application.getPackages().contains(packageName)) {
                 Module launcher = Launcher.class.getModule();
                 controller.addExports(application, packageName, launcher);
                 controller.addOpens(application, packageName, launcher);
             }
-            context = loader;
-        } else {
-            context = classpath;
         }
 
-        Thread.currentThread().setContextClassLoader(context);
+        Thread.currentThread().setContextClassLoader(loader);
         // Run agents before the main class is loaded, mirroring `-javaagent`: a ClassFileTransformer a
         // premain registers must be in place for the JVM to apply it to the main class being defined.
-        runAgents(archive.application(), context);
-        invokeMain(context.loadClass(mainClass), args);
+        runAgents(archive.application(), loader);
+        invokeMain(loader.loadClass(mainClass), args);
     }
 
     /**

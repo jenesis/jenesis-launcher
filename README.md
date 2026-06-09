@@ -26,10 +26,12 @@ done - reconstructed in process:
   same ones `PathPlacement.INFERRED` routes to the module path) are resolved by an in-memory
   `ModuleFinder` and defined into a child `ModuleLayer`. The boot layer is immutable, so this is the
   only supported way to add them at runtime, and the right one: they stay real named modules.
-* **Non-modular jars** become one in-memory `ClassLoader` - the analogue of the unnamed module that
-  `-cp` produces.
-* The module layer's single loader has the class-path loader as its **parent**, so automatic modules
-  can read the class path while strict named modules cannot - the JDK's own readability rule.
+* **Non-modular jars** become the unnamed module of that same loader - the analogue of what `-cp`
+  produces.
+* A **single in-memory loader** hosts both the named modules and the unnamed module, exactly as one
+  application loader does under `java -p modulepath -cp classpath`. So automatic modules can read the
+  class path while strict named modules cannot, and a package owned by a module shadows the same
+  package on the class path - the JDK's own rules.
 
 ## Executable-jar layout
 
@@ -65,11 +67,13 @@ to:
 1. locates the running jar via its `CodeSource` and reads it with `Archive` (a jar file or an exploded
    directory both work);
 2. reads `application.properties` and every nested jar fully into memory;
-3. builds an `InMemoryClassLoader` over `classpath/`;
-4. if there is a `mainModule`, resolves `modulepath/` with `InMemoryModuleFinder` and defines a child
-   layer via the static `ModuleLayer.defineModulesWithOneLoader(...)`, whose returned `Controller`
-   grants the launcher access to the main package - so `main` is invoked even when its package is not
-   exported, exactly as `java -m module/Class` allows;
+3. builds a single `InMemoryClassLoader` over `classpath/` (its unnamed module);
+4. if there are `modulepath/` jars, resolves them with `InMemoryModuleFinder` and defines a child layer
+   via `ModuleLayer.defineModules(...)`, mapping every module to that same loader; when a `mainModule`
+   is declared, the returned `Controller` grants the launcher access to the main package - so `main` is
+   invoked even when its package is not exported, exactly as `java -m module/Class` allows. This happens
+   whether or not a `mainModule` is declared, so a non-modular application can still reach module-path
+   code (for example an agent placed on the module path);
 5. sets the thread context class loader, runs any [bundled agents](#bundled-java-agents), and invokes
    `main`.
 
@@ -88,7 +92,8 @@ The launcher invokes each agent's `premain` in declaration order **before the ma
 a `ClassFileTransformer` registered in `premain` still sees the main class being defined - exactly what
 `-javaagent` guarantees. As the JVM does, it prefers `premain(String, Instrumentation)` and falls back to
 `premain(String)`. The agents are loaded from the application's own runtime loader, so they may live on
-the class path or, for a modular application, on the module path.
+the class path or the module path - the launcher builds the module layer even for a non-modular
+application, so a module-path agent is reachable either way.
 
 The catch is the `Instrumentation`: `-javaagent:foo.jar` resolves a `Premain-Class` from the agent jar's
 *own* class path, which never includes the nested jars, so a bundled agent cannot be passed that way. The
@@ -113,9 +118,11 @@ can run.
 The default `ModuleFinder.of(Path...)` and `URLClassLoader` cannot address a jar nested inside another
 jar, so the launcher implements its own:
 
-* `InMemoryClassLoader` defines classes straight from the in-memory bytes and exposes resources via the
-  `jenesismem:` URL scheme so that `ClassLoader#getResources` - and therefore `ServiceLoader` for
-  class-path providers - returns openable URLs.
+* `InMemoryClassLoader` is the single loader for everything: it defines class-path classes (its unnamed
+  module) and module classes straight from the in-memory bytes, serves module resources through
+  `findResource(module, name)` so `Class#getResourceAsStream` works inside a module, and exposes
+  class-path resources via the `jenesismem:` URL scheme so that `ClassLoader#getResources` - and
+  therefore `ServiceLoader` for class-path providers - returns openable URLs.
 * `InMemoryModuleFinder` builds a `ModuleDescriptor` per jar (read from `module-info.class`, or derived
   for automatic modules from `Automatic-Module-Name` / the file name, with `META-INF/services`
   providers scanned in), backed by a `MapModuleReader` that serves entries from memory.

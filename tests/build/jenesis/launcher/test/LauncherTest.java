@@ -151,6 +151,66 @@ class LauncherTest {
     }
 
     @Test
+    void modulePackageShadowsSamePackageOnClassPath() throws Exception {
+        // A module owns package demo.shared; a class-path jar carries another class in that same package.
+        // One loader hosts both, so the module owns the package and the class-path copy is invisible -
+        // exactly as `java -p modulepath -cp classpath` shadows it.
+        Path bundle = directory.resolve("shadow-app.jar");
+        byte[] probe = TestJars.automaticModuleJar("demo.module", "demo.shared.Probe",
+                TestJars.loadClassMain("demo.shared.Probe", "demo.shared.Ghost"));
+        byte[] ghost = TestJars.classJar("demo.shared.Ghost", TestJars.setPropertyMain("demo.shared.Ghost"));
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.module", "mainClass", "demo.shared.Probe"),
+                Map.of("ghost.jar", ghost),
+                Map.of("module.jar", probe));
+
+        assertThatThrownBy(() -> launch(bundle))
+                .isInstanceOf(ClassNotFoundException.class)
+                .hasMessageContaining("demo.shared.Ghost");
+    }
+
+    @Test
+    void nonModularApplicationRunsModulePathAgent() throws Exception {
+        // No mainModule: the application is non-modular, yet it bundles an agent on the module path. The
+        // launcher builds a layer regardless, so the module-path agent's premain still runs before main.
+        Path bundle = directory.resolve("mp-agent-app.jar");
+        String order = "jenesis.test.mpagent.order";
+        byte[] agent = TestJars.appendPropertyPremain("demo.agent.Mp", order, "A");
+        byte[] main = TestJars.copyPropertyMain("demo.app.Main", order);
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.app.Main", "agentClass", "demo.agent.Mp"),
+                Map.of("app.jar", TestJars.classJar("demo.app.Main", main)),
+                Map.of("agent.jar", TestJars.classJar("demo.agent.Mp", agent)));
+
+        String key = "jenesis.test.mpagent.result";
+        System.clearProperty(key);
+        System.clearProperty(order);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("A");
+    }
+
+    @Test
+    void loadsModuleResourceThroughClassGetResourceAsStream() throws Exception {
+        // A module class reads a bundled resource via Class.getResourceAsStream, which resolves through the
+        // module's ModuleReader - the path that breaks unless the loader serves findResource(module, name).
+        Path bundle = directory.resolve("module-resource-app.jar");
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("demo/modres/Main.class", TestJars.classResourceMain("demo.modres.Main", "/greeting.txt"));
+        entries.put("greeting.txt", "hello".getBytes(StandardCharsets.UTF_8));
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "modres", "mainClass", "demo.modres.Main"),
+                Map.of(),
+                Map.of("modres.jar", TestJars.jar(entries)));
+
+        String key = "jenesis.test.module.resource";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("hello");
+    }
+
+    @Test
     void rejectsBundleWithoutMainClass() throws Exception {
         Path bundle = directory.resolve("empty-app.jar");
         TestJars.writeBundle(bundle, Map.of(), Map.of(), Map.of());

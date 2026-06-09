@@ -135,6 +135,34 @@ final class TestJars {
                 .return_());
     }
 
+    /**
+     * A class whose {@code main} reads {@code resource} via {@code <ThisClass>.class.getResourceAsStream}
+     * and stores its contents into {@code System.setProperty(args[0], contents)}. Unlike
+     * {@link #readResourceMain}, this resolves through the owning module's
+     * {@link java.lang.module.ModuleReader}, exercising the module resource path.
+     */
+    static byte[] classResourceMain(String binaryName, String resource) {
+        ClassDesc cdClass = ClassDesc.of("java.lang.Class");
+        return main(binaryName, code -> code
+                .loadConstant(ClassDesc.of(binaryName))
+                .loadConstant(resource)
+                .invokevirtual(cdClass, "getResourceAsStream",
+                        MethodTypeDesc.of(CD_InputStream, ConstantDescs.CD_String))
+                .invokevirtual(CD_InputStream, "readAllBytes",
+                        MethodTypeDesc.of(ConstantDescs.CD_byte.arrayType()))
+                .astore(1)
+                .aload(0).iconst_0().aaload()
+                .new_(ConstantDescs.CD_String)
+                .dup()
+                .aload(1)
+                .invokespecial(ConstantDescs.CD_String, ConstantDescs.INIT_NAME,
+                        MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_byte.arrayType()))
+                .invokestatic(CD_System, "setProperty",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String, ConstantDescs.CD_String))
+                .pop()
+                .return_());
+    }
+
     private static byte[] main(String binaryName, Consumer<CodeBuilder> body) {
         return method(binaryName, "main",
                 MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_String.arrayType()), body);
