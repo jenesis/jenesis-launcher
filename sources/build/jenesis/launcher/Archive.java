@@ -32,6 +32,9 @@ final class Archive {
 
         URL url(String entry);
 
+        /** The URL of a dependency's exploded folder ({@code prefix}); a stable code-source / seal base. */
+        URL baseUrl(String prefix);
+
         Set<String> names() throws IOException;
     }
 
@@ -91,6 +94,11 @@ final class Archive {
                 }
             }
             return source.url(prefix + entry);
+        }
+
+        /** The dependency's own folder URL - its code source and seal base. */
+        URL url() {
+            return source.baseUrl(prefix);
         }
     }
 
@@ -266,9 +274,11 @@ final class Archive {
 
         @Override
         public URL url(String entry) {
-            if (zip.getEntry(entry) == null) {
-                return null;
-            }
+            return zip.getEntry(entry) == null ? null : baseUrl(entry);
+        }
+
+        @Override
+        public URL baseUrl(String entry) {
             try {
                 return URI.create("jar:" + path.toUri() + "!/" + encode(entry)).toURL();
             } catch (MalformedURLException e) {
@@ -316,12 +326,13 @@ final class Archive {
 
         @Override
         public URL url(String entry) {
-            Path file = root.resolve(entry);
-            if (!Files.isRegularFile(file)) {
-                return null;
-            }
+            return Files.isRegularFile(root.resolve(entry)) ? baseUrl(entry) : null;
+        }
+
+        @Override
+        public URL baseUrl(String entry) {
             try {
-                return file.toUri().toURL();
+                return root.resolve(entry).toUri().toURL();
             } catch (MalformedURLException e) {
                 throw new IllegalStateException("Failed to build a URL for " + entry, e);
             }

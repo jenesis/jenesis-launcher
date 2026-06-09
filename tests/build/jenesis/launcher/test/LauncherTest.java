@@ -340,6 +340,53 @@ class LauncherTest {
     }
 
     @Test
+    void exposesPackageImplementationVersionFromManifest() throws Exception {
+        Path bundle = directory.resolve("metadata-app.jar");
+        Map<String, byte[]> jar = new LinkedHashMap<>();
+        jar.put("META-INF/MANIFEST.MF", manifest(Map.of("Implementation-Version", "1.2.3")));
+        jar.put("demo/meta/Main.class", TestJars.implementationVersionMain("demo.meta.Main"));
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.meta.Main"),
+                Map.of("meta.jar", TestJars.jar(jar)),
+                Map.of());
+
+        String key = "jenesis.test.metadata";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("1.2.3");
+    }
+
+    @Test
+    void enforcesSealedPackageFromManifest() throws Exception {
+        // A Sealed manifest seals the package to the dependency's URL; the class defines with a matching
+        // CodeSource, so it loads (no sealing violation) and reports itself sealed.
+        Path bundle = directory.resolve("sealed-app.jar");
+        Map<String, byte[]> jar = new LinkedHashMap<>();
+        jar.put("META-INF/MANIFEST.MF", manifest(Map.of("Sealed", "true")));
+        jar.put("demo/sealed/Main.class", TestJars.sealedMain("demo.sealed.Main"));
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.sealed.Main"),
+                Map.of("sealed.jar", TestJars.jar(jar)),
+                Map.of());
+
+        String key = "jenesis.test.sealed";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("true");
+    }
+
+    private static byte[] manifest(Map<String, String> attributes) throws Exception {
+        Manifest manifest = new Manifest();
+        manifest.getMainAttributes().putValue("Manifest-Version", "1.0");
+        attributes.forEach(manifest.getMainAttributes()::putValue);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        manifest.write(out);
+        return out.toByteArray();
+    }
+
+    @Test
     void rejectsBundleWithoutMainClass() throws Exception {
         Path bundle = directory.resolve("empty-app.jar");
         TestJars.writeBundle(bundle, Map.of(), Map.of(), Map.of());

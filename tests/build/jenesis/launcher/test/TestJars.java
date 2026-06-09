@@ -183,6 +183,38 @@ final class TestJars {
                 .return_());
     }
 
+    /** A class whose {@code main} stores its own package's {@code Implementation-Version} into {@code args[0]}. */
+    static byte[] implementationVersionMain(String binaryName) {
+        ClassDesc cdClass = ClassDesc.of("java.lang.Class");
+        ClassDesc cdPackage = ClassDesc.of("java.lang.Package");
+        return main(binaryName, code -> code
+                .aload(0).iconst_0().aaload()
+                .loadConstant(ClassDesc.of(binaryName))
+                .invokevirtual(cdClass, "getPackage", MethodTypeDesc.of(cdPackage))
+                .invokevirtual(cdPackage, "getImplementationVersion", MethodTypeDesc.of(ConstantDescs.CD_String))
+                .invokestatic(CD_System, "setProperty",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String, ConstantDescs.CD_String))
+                .pop()
+                .return_());
+    }
+
+    /** A class whose {@code main} stores whether its own package is sealed into {@code args[0]}. */
+    static byte[] sealedMain(String binaryName) {
+        ClassDesc cdClass = ClassDesc.of("java.lang.Class");
+        ClassDesc cdPackage = ClassDesc.of("java.lang.Package");
+        return main(binaryName, code -> code
+                .aload(0).iconst_0().aaload()
+                .loadConstant(ClassDesc.of(binaryName))
+                .invokevirtual(cdClass, "getPackage", MethodTypeDesc.of(cdPackage))
+                .invokevirtual(cdPackage, "isSealed", MethodTypeDesc.of(ConstantDescs.CD_boolean))
+                .invokestatic(ConstantDescs.CD_String, "valueOf",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_boolean))
+                .invokestatic(CD_System, "setProperty",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String, ConstantDescs.CD_String))
+                .pop()
+                .return_());
+    }
+
     private static byte[] main(String binaryName, Consumer<CodeBuilder> body) {
         return method(binaryName, "main",
                 MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_String.arrayType()), body);

@@ -146,13 +146,14 @@ outer jar, so the launcher reads each one only when first needed - no nested-jar
 The launcher reconstructs the module graph and class loading in memory, faithfully but not exhaustively.
 The following are worth knowing before bundling an application.
 
-* **Loaded classes carry no `CodeSource`, and signatures and sealing are not enforced.** Classes are
-  defined straight from their in-memory bytes (`defineClass` with no `ProtectionDomain`), so
-  `getClass().getProtectionDomain().getCodeSource()` is `null` for bundled code - the common idiom of
-  locating "my own jar" through the code source returns nothing (only the launcher itself can, since it
-  is loaded by the system loader from the outer jar). JAR signatures are **not verified** at load (a
-  dependency's signature files are exploded as ordinary entries and ignored), and **sealed packages are
-  not enforced** either.
+* **Class identity is reconstructed from the bundle, not a real jar file.** A class-path class is defined
+  with a `CodeSource` and a package whose location is the dependency's URL *inside* the outer jar (e.g.
+  `jar:file:/…/foo.jar!/classpath/dep.jar/`), populated from that dependency's manifest - so
+  `Package#getImplementationVersion`, sealed packages, and `getProtectionDomain().getCodeSource()` all
+  work. But it is not a standalone jar on disk, so the "open my own jar file" idiom still fails, and **JAR
+  signatures are not verified** (a dependency's signature files are exploded as ordinary entries and
+  ignored). Module classes carry no `CodeSource` - the module system, not a manifest, governs their
+  packages.
 
 * **The module graph is fixed to the bundle plus the default boot modules.** Every bundled module is
   bound as a root against the boot layer, but there is no in-bundle way to pull in JDK modules that are
@@ -173,10 +174,6 @@ The following are worth knowing before bundling an application.
   reachable only through a class in that module (`Class#getResourceAsStream`) or `ServiceLoader`, matching
   JPMS encapsulation - so `contextClassLoader.getResourceAsStream("some/module/internal.txt")` will not
   find it.
-
-* **Package metadata is not reconstructed.** Packages are defined without manifest attributes, so
-  `Package#getImplementationVersion`, `getSpecificationVersion` and similar return `null` for bundled
-  code.
 
 * **Read on demand, but the jar stays open.** Class and resource bytes are read from the still-open outer
   jar (or directory) when first needed and not retained, so heap use is roughly the entry-name index
@@ -210,7 +207,8 @@ The tests synthesise class files and exploded-bundle fixtures with the JDK Class
 `Launcher#run` end to end (class-path and modular apps, automatic-module naming, resources via
 `jar:`/`file:` URLs from both a jar and an exploded directory, a bundle path with spaces, a module
 reading the class path, split-package shadowing, native-library extraction, multi-release class selection,
-and bundled agents whose `premain` runs - in declaration order, with arguments - before the main class).
+package metadata and sealing from the manifest, and bundled agents whose `premain` runs - in declaration
+order, with arguments - before the main class).
 
 ## Using it
 

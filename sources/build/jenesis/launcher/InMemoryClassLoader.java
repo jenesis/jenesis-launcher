@@ -2,6 +2,8 @@ package build.jenesis.launcher;
 
 import module java.base;
 
+import java.util.jar.Attributes;
+
 /**
  * The single loader for every dependency in an executable jar - both the {@code classpath/} jars (its
  * unnamed module) and the {@code modulepath/} modules (defined to it as named modules through
@@ -31,6 +33,8 @@ final class InMemoryClassLoader extends ClassLoader {
     private final List<Archive.Jar> classpath;
     private final Map<String, String> packageToModule = new HashMap<>();
     private final Map<String, ModuleReader> readers = new LinkedHashMap<>();
+    private final Map<String, ProtectionDomain> domains = new ConcurrentHashMap<>();
+    private final Map<String, Optional<Manifest>> manifests = new ConcurrentHashMap<>();
 
     InMemoryClassLoader(List<Archive.Jar> classpath, InMemoryModuleFinder finder, ClassLoader parent)
             throws IOException {
@@ -63,22 +67,71 @@ final class InMemoryClassLoader extends ClassLoader {
             // class to its module automatically; do not definePackage for a module package.
             return defineClass(name, data, 0, data.length);
         }
-        byte[] data = classpathResource(resource);
-        if (data == null) {
-            throw new ClassNotFoundException(name);
-        }
-        int dot = name.lastIndexOf('.');
-        if (dot > 0) {
-            String packageName = name.substring(0, dot);
-            if (getDefinedPackage(packageName) == null) {
-                try {
-                    definePackage(packageName, null, null, null, null, null, null, null);
-                } catch (IllegalArgumentException _) {
-                    // Raced with another thread defining the same package; harmless.
+        for (Archive.Jar jar : classpath) {
+            byte[] data = jar.open(resource);
+            if (data != null) {
+                int dot = name.lastIndexOf('.');
+                if (dot > 0) {
+                    definePackage(jar, name.substring(0, dot));
                 }
+                // The dependency's CodeSource lets sealed packages (defined below) be honored.
+                return defineClass(name, data, 0, data.length, domain(jar));
             }
         }
-        return defineClass(name, data, 0, data.length);
+        throw new ClassNotFoundException(name);
+    }
+
+    private void definePackage(Archive.Jar jar, String packageName) {
+        if (getDefinedPackage(packageName) != null) {
+            return;
+        }
+        Manifest manifest = manifest(jar);
+        try {
+            if (manifest == null) {
+                definePackage(packageName, null, null, null, null, null, null, null);
+                return;
+            }
+            // Reproduce URLClassLoader's manifest reading: a per-package section (Name: pkg/) overrides the
+            // main attributes; a sealed package is sealed to the dependency's URL, which matches the
+            // CodeSource of the classes defined into it, so sealing is honored rather than violated.
+            Attributes main = manifest.getMainAttributes();
+            Attributes pkg = manifest.getAttributes(packageName.replace('.', '/') + "/");
+            URL sealBase = Boolean.parseBoolean(attribute(Attributes.Name.SEALED, pkg, main)) ? jar.url() : null;
+            definePackage(packageName,
+                    attribute(Attributes.Name.SPECIFICATION_TITLE, pkg, main),
+                    attribute(Attributes.Name.SPECIFICATION_VERSION, pkg, main),
+                    attribute(Attributes.Name.SPECIFICATION_VENDOR, pkg, main),
+                    attribute(Attributes.Name.IMPLEMENTATION_TITLE, pkg, main),
+                    attribute(Attributes.Name.IMPLEMENTATION_VERSION, pkg, main),
+                    attribute(Attributes.Name.IMPLEMENTATION_VENDOR, pkg, main),
+                    sealBase);
+        } catch (IllegalArgumentException _) {
+            // Raced with another thread defining the same package; harmless.
+        }
+    }
+
+    private static String attribute(Attributes.Name name, Attributes pkg, Attributes main) {
+        String value = pkg == null ? null : pkg.getValue(name);
+        return value != null ? value : main.getValue(name);
+    }
+
+    private ProtectionDomain domain(Archive.Jar jar) {
+        return domains.computeIfAbsent(jar.name(), _ ->
+                new ProtectionDomain(new CodeSource(jar.url(), (CodeSigner[]) null), null));
+    }
+
+    private Manifest manifest(Archive.Jar jar) {
+        return manifests.computeIfAbsent(jar.name(), _ -> {
+            byte[] bytes = jar.open("META-INF/MANIFEST.MF");
+            if (bytes == null) {
+                return Optional.empty();
+            }
+            try {
+                return Optional.of(new Manifest(new ByteArrayInputStream(bytes)));
+            } catch (IOException _) {
+                return Optional.empty();
+            }
+        }).orElse(null);
     }
 
     @Override
@@ -130,16 +183,6 @@ final class InMemoryClassLoader extends ClassLoader {
             }
         }
         return Collections.enumeration(urls);
-    }
-
-    private byte[] classpathResource(String name) {
-        for (Archive.Jar jar : classpath) {
-            byte[] data = jar.open(name);
-            if (data != null) {
-                return data;
-            }
-        }
-        return null;
     }
 
     private byte[] moduleResource(String module, String name) {
