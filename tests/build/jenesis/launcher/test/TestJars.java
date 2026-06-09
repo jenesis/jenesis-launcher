@@ -32,6 +32,17 @@ final class TestJars {
                 .return_());
     }
 
+    /** A class whose {@code main} runs {@code System.setProperty(args[0], value)} for a fixed {@code value}. */
+    static byte[] constantPropertyMain(String binaryName, String value) {
+        return main(binaryName, code -> code
+                .aload(0).iconst_0().aaload()
+                .loadConstant(value)
+                .invokestatic(CD_System, "setProperty",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String, ConstantDescs.CD_String))
+                .pop()
+                .return_());
+    }
+
     /**
      * A class whose {@code main} copies a system property into another:
      * {@code System.setProperty(args[0], System.getProperty(source))}. Used to observe, from the

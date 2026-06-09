@@ -289,6 +289,57 @@ class LauncherTest {
     }
 
     @Test
+    void prefersMultiReleaseClassForTheRuntimeVersion() throws Exception {
+        int version = Runtime.version().feature();
+        Path bundle = directory.resolve("mr-app.jar");
+        Map<String, byte[]> jar = new LinkedHashMap<>();
+        jar.put("META-INF/MANIFEST.MF", multiReleaseManifest());
+        jar.put("demo/mr/Main.class", TestJars.constantPropertyMain("demo.mr.Main", "base"));
+        jar.put("META-INF/versions/" + version + "/demo/mr/Main.class",
+                TestJars.constantPropertyMain("demo.mr.Main", "versioned"));
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.mr.Main"),
+                Map.of("mr.jar", TestJars.jar(jar)),
+                Map.of());
+
+        String key = "jenesis.test.mr";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("versioned");
+    }
+
+    @Test
+    void ignoresMultiReleaseClassForAFutureVersion() throws Exception {
+        int future = Runtime.version().feature() + 1;
+        Path bundle = directory.resolve("mr-future-app.jar");
+        Map<String, byte[]> jar = new LinkedHashMap<>();
+        jar.put("META-INF/MANIFEST.MF", multiReleaseManifest());
+        jar.put("demo/mr/Main.class", TestJars.constantPropertyMain("demo.mr.Main", "base"));
+        jar.put("META-INF/versions/" + future + "/demo/mr/Main.class",
+                TestJars.constantPropertyMain("demo.mr.Main", "future"));
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.mr.Main"),
+                Map.of("mr.jar", TestJars.jar(jar)),
+                Map.of());
+
+        String key = "jenesis.test.mr.future";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("base");
+    }
+
+    private static byte[] multiReleaseManifest() throws Exception {
+        Manifest manifest = new Manifest();
+        manifest.getMainAttributes().putValue("Manifest-Version", "1.0");
+        manifest.getMainAttributes().putValue("Multi-Release", "true");
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        manifest.write(out);
+        return out.toByteArray();
+    }
+
+    @Test
     void rejectsBundleWithoutMainClass() throws Exception {
         Path bundle = directory.resolve("empty-app.jar");
         TestJars.writeBundle(bundle, Map.of(), Map.of(), Map.of());

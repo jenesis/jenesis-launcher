@@ -127,7 +127,9 @@ outer jar, so the launcher reads each one only when first needed - no nested-jar
 
 * `Archive` opens the outer jar (a `java.util.zip.ZipFile`) or the exploded directory once, indexes the
   entry names, and groups them by `classpath/<name>/` and `modulepath/<name>/` into lazy `Jar` handles.
-  Each handle reads an entry's bytes on demand and hands out a standard `jar:`/`file:` URL for it.
+  Each handle reads an entry's bytes on demand and hands out a standard `jar:`/`file:` URL for it. For a
+  multi-release dependency it serves the highest `META-INF/versions/<n>/` entry the runtime supports,
+  having noted at index time which releases the dependency actually ships.
 * `InMemoryClassLoader` is the single loader for everything. It holds no class or resource bytes - only
   the `Jar` handles and a package-to-module index - and reads (then discards) a class's bytes from the
   open jar when the VM asks for it. Class-path resources are returned as `jar:`/`file:` URLs, so
@@ -151,11 +153,6 @@ The following are worth knowing before bundling an application.
   is loaded by the system loader from the outer jar). JAR signatures are **not verified** at load (a
   dependency's signature files are exploded as ordinary entries and ignored), and **sealed packages are
   not enforced** either.
-
-* **Multi-release jars are not honored.** A class is always resolved from its base entry
-  (`pkg/Cls.class`); entries under `META-INF/versions/<n>/` and the `Multi-Release: true` manifest
-  attribute are ignored. A multi-release dependency therefore runs its base (lowest-Java) classes even on
-  a newer JDK, missing any version-specific variants it ships.
 
 * **The module graph is fixed to the bundle plus the default boot modules.** Every bundled module is
   bound as a root against the boot layer, but there is no in-bundle way to pull in JDK modules that are
@@ -212,8 +209,8 @@ java build/jenesis/Project.java stage    # stage the published artifact under ta
 The tests synthesise class files and exploded-bundle fixtures with the JDK Class-File API and drive
 `Launcher#run` end to end (class-path and modular apps, automatic-module naming, resources via
 `jar:`/`file:` URLs from both a jar and an exploded directory, a bundle path with spaces, a module
-reading the class path, split-package shadowing, native-library extraction, and bundled agents whose
-`premain` runs - in declaration order, with arguments - before the main class).
+reading the class path, split-package shadowing, native-library extraction, multi-release class selection,
+and bundled agents whose `premain` runs - in declaration order, with arguments - before the main class).
 
 ## Using it
 

@@ -38,19 +38,26 @@ final class Archive {
     /**
      * A dependency exploded under {@code classpath/<name>/} or {@code modulepath/<name>/}. {@code name} is
      * the original jar file name (so automatic-module naming is unchanged); {@link #names()} are its entry
-     * names with that prefix stripped. Bytes and URLs are fetched from the {@link Source} lazily.
+     * names with that prefix stripped, presented in the multi-release view. Bytes and URLs are fetched from
+     * the {@link Source} lazily.
+     *
+     * <p>For a multi-release dependency, {@code versions} holds the {@code META-INF/versions/<n>/} versions
+     * that are actually present and not above the runtime - highest first - so a lookup checks only those
+     * overlays before falling back to the base entry, rather than probing every release.</p>
      */
     static final class Jar {
 
         private final String name;
         private final String prefix;
         private final List<String> names;
+        private final int[] versions;
         private final Source source;
 
-        Jar(String name, String prefix, List<String> names, Source source) {
+        Jar(String name, String prefix, List<String> names, int[] versions, Source source) {
             this.name = name;
             this.prefix = prefix;
             this.names = names;
+            this.versions = versions;
             this.source = source;
         }
 
@@ -64,6 +71,12 @@ final class Archive {
 
         byte[] open(String entry) {
             try {
+                for (int version : versions) {
+                    byte[] data = source.open(prefix + VERSIONS + version + "/" + entry);
+                    if (data != null) {
+                        return data;
+                    }
+                }
                 return source.open(prefix + entry);
             } catch (IOException e) {
                 throw new UncheckedIOException("Failed to read " + prefix + entry, e);
@@ -71,6 +84,12 @@ final class Archive {
         }
 
         URL url(String entry) {
+            for (int version : versions) {
+                URL url = source.url(prefix + VERSIONS + version + "/" + entry);
+                if (url != null) {
+                    return url;
+                }
+            }
             return source.url(prefix + entry);
         }
     }
@@ -131,12 +150,97 @@ final class Archive {
                 .add(rest.substring(slash + 1));
     }
 
-    private static void collect(Map<String, List<String>> groups, String prefix, Source source, List<Jar> target) {
+    private static final String VERSIONS = "META-INF/versions/";
+
+    private static void collect(Map<String, List<String>> groups, String prefix, Source source, List<Jar> target)
+            throws IOException {
         for (Map.Entry<String, List<String>> group : groups.entrySet()) {
-            List<String> names = group.getValue();
+            String groupPrefix = prefix + group.getKey() + "/";
+            int[] versions = multiReleaseVersions(group.getValue(), source, groupPrefix);
+            List<String> names = effectiveNames(group.getValue(), versions);
             names.sort(Comparator.naturalOrder());
-            target.add(new Jar(group.getKey(), prefix + group.getKey() + "/", names, source));
+            target.add(new Jar(group.getKey(), groupPrefix, names, versions, source));
         }
+    }
+
+    /**
+     * The {@code META-INF/versions/<n>/} versions a multi-release dependency actually ships that are not
+     * above the runtime, highest first; empty if the dependency is not multi-release.
+     */
+    private static int[] multiReleaseVersions(List<String> names, Source source, String groupPrefix)
+            throws IOException {
+        byte[] manifest = source.open(groupPrefix + "META-INF/MANIFEST.MF");
+        if (manifest == null || !isMultiRelease(manifest)) {
+            return new int[0];
+        }
+        int runtime = Runtime.version().feature();
+        SortedSet<Integer> versions = new TreeSet<>(Comparator.reverseOrder());
+        for (String name : names) {
+            int version = versionOf(name);
+            if (version >= 9 && version <= runtime) {
+                versions.add(version);
+            }
+        }
+        int[] result = new int[versions.size()];
+        int index = 0;
+        for (int version : versions) {
+            result[index++] = version;
+        }
+        return result;
+    }
+
+    private static boolean isMultiRelease(byte[] manifest) {
+        try {
+            return Boolean.parseBoolean(new Manifest(new ByteArrayInputStream(manifest))
+                    .getMainAttributes().getValue("Multi-Release"));
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    /** The release of a {@code META-INF/versions/<n>/...} entry, or {@code -1} if it is not a versioned entry. */
+    private static int versionOf(String name) {
+        if (!name.startsWith(VERSIONS)) {
+            return -1;
+        }
+        String rest = name.substring(VERSIONS.length());
+        int slash = rest.indexOf('/');
+        if (slash <= 0) {
+            return -1;
+        }
+        try {
+            return Integer.parseInt(rest.substring(0, slash));
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    /**
+     * The multi-release view of the entry names: base entries plus the applicable versioned entries under
+     * their base names, with the literal {@code META-INF/versions/} entries removed. For a non-multi-release
+     * dependency the names are returned unchanged.
+     */
+    private static List<String> effectiveNames(List<String> names, int[] versions) {
+        if (versions.length == 0) {
+            return new ArrayList<>(names);
+        }
+        Set<Integer> applicable = new HashSet<>();
+        for (int version : versions) {
+            applicable.add(version);
+        }
+        Set<String> effective = new LinkedHashSet<>();
+        for (String name : names) {
+            if (name.startsWith(VERSIONS)) {
+                if (applicable.contains(versionOf(name))) {
+                    String rest = name.substring(VERSIONS.length());
+                    effective.add(rest.substring(rest.indexOf('/') + 1));
+                }
+                // A version above the runtime (or unparseable) is ignored, as the JDK does.
+            } else {
+                effective.add(name);
+            }
+        }
+        return new ArrayList<>(effective);
     }
 
     private static final class ZipSource implements Source {
