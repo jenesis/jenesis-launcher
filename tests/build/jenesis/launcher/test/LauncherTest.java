@@ -102,6 +102,55 @@ class LauncherTest {
     }
 
     @Test
+    void runsAgentsBeforeMainInDeclaredOrder() throws Exception {
+        // Two agents each append their tag to a property; main copies it. That main sees "AB" proves
+        // both agents' premain ran, in the order declared by agentClass, before the main class loaded.
+        Path bundle = directory.resolve("agent-app.jar");
+        String order = "jenesis.test.agent.order";
+        Map<String, byte[]> classpath = new LinkedHashMap<>();
+        classpath.put("first.jar", TestJars.classJar("demo.agent.First",
+                TestJars.appendPropertyPremain("demo.agent.First", order, "A")));
+        classpath.put("second.jar", TestJars.classJar("demo.agent.Second",
+                TestJars.appendPropertyPremain("demo.agent.Second", order, "B")));
+        classpath.put("app.jar", TestJars.classJar("demo.agent.Main",
+                TestJars.copyPropertyMain("demo.agent.Main", order)));
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.agent.Main", "agentClass", "demo.agent.First,demo.agent.Second"),
+                classpath,
+                Map.of());
+
+        String key = "jenesis.test.agent.result";
+        System.clearProperty(key);
+        System.clearProperty(order);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("AB");
+    }
+
+    @Test
+    void passesAgentArgumentsToPremain() throws Exception {
+        // agentClass entries may carry `=<args>` like `-javaagent:jar=args`; the args run to the end.
+        Path bundle = directory.resolve("agent-args-app.jar");
+        String captured = "jenesis.test.agent.args";
+        Map<String, byte[]> classpath = new LinkedHashMap<>();
+        classpath.put("echo.jar", TestJars.classJar("demo.agent.Echo",
+                TestJars.argumentPremain("demo.agent.Echo", captured)));
+        classpath.put("app.jar", TestJars.classJar("demo.agent.Main",
+                TestJars.copyPropertyMain("demo.agent.Main", captured)));
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.agent.Main", "agentClass", "demo.agent.Echo=hello world"),
+                classpath,
+                Map.of());
+
+        String key = "jenesis.test.agent.args.result";
+        System.clearProperty(key);
+        System.clearProperty(captured);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("hello world");
+    }
+
+    @Test
     void rejectsBundleWithoutMainClass() throws Exception {
         Path bundle = directory.resolve("empty-app.jar");
         TestJars.writeBundle(bundle, Map.of(), Map.of(), Map.of());

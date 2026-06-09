@@ -12,6 +12,8 @@
  */
 module build.jenesis.launcher {
 
+    requires java.instrument;
+
     exports build.jenesis.launcher;
 
     provides java.net.spi.URLStreamHandlerProvider

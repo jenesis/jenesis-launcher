@@ -41,7 +41,7 @@ foo.jar
 ├── META-INF/services/
 │   └── java.net.spi.URLStreamHandlerProvider             (shaded from the launcher)
 ├── build/jenesis/launcher/*.class                        the launcher itself (unnamed module at run time)
-├── application.properties                                mainClass=..., mainModule=...
+├── application.properties                                mainClass=..., mainModule=..., agentClass=...
 ├── classpath/
 │   └── *.jar                                             non-modular dependencies
 └── modulepath/
@@ -49,11 +49,14 @@ foo.jar
 ```
 
 `application.properties` is the exact file the previous `Bundle` step already wrote
-(`mainClass` and, when modular, `mainModule`), so the bundling step only has to:
+(`mainClass`, when modular `mainModule`, and optionally `agentClass`), so the bundling step only has
+to:
 
 1. copy the launcher's own classes and its `META-INF/services` entry into the jar root;
 2. keep writing `application.properties`, `classpath/*.jar` and `modulepath/*.jar` as before;
-3. set the manifest `Main-Class` to `build.jenesis.launcher.Launcher`.
+3. set the manifest `Main-Class` to `build.jenesis.launcher.Launcher`;
+4. when `agentClass` is present, add `Launcher-Agent-Class: build.jenesis.launcher.LauncherAgent` to the
+   manifest (see [Bundled Java agents](#bundled-java-agents)).
 
 ## How a launch proceeds
 
@@ -67,7 +70,43 @@ foo.jar
    layer via the static `ModuleLayer.defineModulesWithOneLoader(...)`, whose returned `Controller`
    grants the launcher access to the main package - so `main` is invoked even when its package is not
    exported, exactly as `java -m module/Class` allows;
-5. sets the thread context class loader and invokes `main`.
+5. sets the thread context class loader, runs any [bundled agents](#bundled-java-agents), and invokes
+   `main`.
+
+### Bundled Java agents
+
+The optional `agentClass` property lets an executable jar carry its own Java agents - a comma-separated
+list of fully qualified agent class names, each optionally followed by `=<arguments>` (mirroring
+`-javaagent:<jar>=<arguments>`; the arguments run to the end of the entry):
+
+```
+mainClass=com.example.Main
+agentClass=net.bytebuddy.agent.Installer,com.example.Tracing=verbose
+```
+
+The launcher invokes each agent's `premain` in declaration order **before the main class is loaded**, so
+a `ClassFileTransformer` registered in `premain` still sees the main class being defined - exactly what
+`-javaagent` guarantees. As the JVM does, it prefers `premain(String, Instrumentation)` and falls back to
+`premain(String)`. The agents are loaded from the application's own runtime loader, so they may live on
+the class path or, for a modular application, on the module path.
+
+The catch is the `Instrumentation`: `-javaagent:foo.jar` resolves a `Premain-Class` from the agent jar's
+*own* class path, which never includes the nested jars, so a bundled agent cannot be passed that way. The
+launcher therefore ships [`LauncherAgent`](sources/build/jenesis/launcher/LauncherAgent.java) as the one
+agent the JVM does know about. Referencing it from the executable jar's manifest captures a real
+`Instrumentation` that the launcher then hands to every bundled agent:
+
+```
+Launcher-Agent-Class: build.jenesis.launcher.LauncherAgent   # java -jar foo.jar
+Premain-Class:        build.jenesis.launcher.LauncherAgent   # java -javaagent:foo.jar -jar foo.jar
+Agent-Class:          build.jenesis.launcher.LauncherAgent   # dynamic attach
+```
+
+`Launcher-Agent-Class` is the one to add for a plain `java -jar foo.jar`: the JVM loads it before `main`
+and calls its `agentmain` with the `Instrumentation`. Capabilities are read from the same manifest, so add
+`Can-Redefine-Classes: true` / `Can-Retransform-Classes: true` if the bundled agents need them. Without
+any of these attributes no `Instrumentation` is captured, and only agents that declare `premain(String)`
+can run.
 
 ### Reading nested jars in memory
 
@@ -105,7 +144,8 @@ java build/jenesis/Project.java stage    # stage the published artifact under ta
 
 The tests synthesise class files and nested-jar fixtures in memory with the JDK Class-File API and
 drive `Launcher#run` end to end (class-path apps, modular apps in their own layer, automatic-module
-naming, in-memory resource URLs, and a module reading the class path).
+naming, in-memory resource URLs, a module reading the class path, and bundled agents whose `premain`
+runs - in declaration order, with arguments - before the main class).
 
 ## Using it
 

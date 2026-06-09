@@ -33,6 +33,23 @@ final class TestJars {
     }
 
     /**
+     * A class whose {@code main} copies a system property into another:
+     * {@code System.setProperty(args[0], System.getProperty(source))}. Used to observe, from the
+     * application, a value an agent's {@code premain} wrote before {@code main} ran.
+     */
+    static byte[] copyPropertyMain(String binaryName, String source) {
+        return main(binaryName, code -> code
+                .aload(0).iconst_0().aaload()
+                .loadConstant(source)
+                .invokestatic(CD_System, "getProperty",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String))
+                .invokestatic(CD_System, "setProperty",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String, ConstantDescs.CD_String))
+                .pop()
+                .return_());
+    }
+
+    /**
      * A class whose {@code main} reads {@code resource} via the thread context class loader and stores
      * its contents into {@code System.setProperty(args[0], contents)} - exercising the in-memory
      * resource URL path.
@@ -82,12 +99,57 @@ final class TestJars {
                 .return_());
     }
 
+    /**
+     * An agent class whose {@code premain(String)} appends {@code tag} to the system property
+     * {@code key}: {@code System.setProperty(key, System.getProperty(key, "") + tag)}. Appending makes
+     * the invocation order of several agents observable.
+     */
+    static byte[] appendPropertyPremain(String binaryName, String key, String tag) {
+        return premain(binaryName, code -> code
+                .loadConstant(key)
+                .loadConstant(key)
+                .loadConstant("")
+                .invokestatic(CD_System, "getProperty",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String, ConstantDescs.CD_String))
+                .loadConstant(tag)
+                .invokevirtual(ConstantDescs.CD_String, "concat",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String))
+                .invokestatic(CD_System, "setProperty",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String, ConstantDescs.CD_String))
+                .pop()
+                .return_());
+    }
+
+    /**
+     * An agent class whose {@code premain(String args)} stores the arguments it was given:
+     * {@code System.setProperty(key, args)}. Used to prove the {@code agentClass=...=<args>} arguments
+     * reach the agent.
+     */
+    static byte[] argumentPremain(String binaryName, String key) {
+        return premain(binaryName, code -> code
+                .loadConstant(key)
+                .aload(0)
+                .invokestatic(CD_System, "setProperty",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String, ConstantDescs.CD_String))
+                .pop()
+                .return_());
+    }
+
     private static byte[] main(String binaryName, Consumer<CodeBuilder> body) {
+        return method(binaryName, "main",
+                MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_String.arrayType()), body);
+    }
+
+    private static byte[] premain(String binaryName, Consumer<CodeBuilder> body) {
+        return method(binaryName, "premain",
+                MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_String), body);
+    }
+
+    private static byte[] method(String binaryName, String name, MethodTypeDesc descriptor, Consumer<CodeBuilder> body) {
         return ClassFile.of().build(ClassDesc.of(binaryName), builder -> {
             builder.withFlags(ClassFile.ACC_PUBLIC | ClassFile.ACC_FINAL);
             builder.withSuperclass(ConstantDescs.CD_Object);
-            builder.withMethodBody("main",
-                    MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_String.arrayType()),
+            builder.withMethodBody(name, descriptor,
                     ClassFile.ACC_PUBLIC | ClassFile.ACC_STATIC,
                     body::accept);
         });
