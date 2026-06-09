@@ -3,14 +3,14 @@ package build.jenesis.launcher;
 import module java.base;
 
 /**
- * A {@link ModuleFinder} over the modular nested jars, resolving each one from memory.
+ * A {@link ModuleFinder} over the modular dependencies, resolving each exploded module on demand.
  *
- * <p>For a jar that carries a {@code module-info.class} the descriptor is read straight from the
- * compiled descriptor. For an automatic module (one with no {@code module-info.class}) the name is
- * taken from the {@code Automatic-Module-Name} manifest header when present, otherwise derived from
- * the file name with the same algorithm the JDK's {@code ModulePath} uses; its packages and
- * {@code META-INF/services} providers are scanned out of the jar so {@link java.util.ServiceLoader}
- * keeps working.</p>
+ * <p>For a module that carries a {@code module-info.class} the descriptor is read straight from the
+ * compiled descriptor. For an automatic module (one with no {@code module-info.class}) the name is taken
+ * from the {@code Automatic-Module-Name} manifest header when present, otherwise derived from the original
+ * jar file name with the same algorithm the JDK's {@code ModulePath} uses; its packages and
+ * {@code META-INF/services} providers are scanned out of the entry names so {@link java.util.ServiceLoader}
+ * keeps working. Bytes are read from the {@link Archive.Jar} lazily.</p>
  */
 final class InMemoryModuleFinder implements ModuleFinder {
 
@@ -43,31 +43,30 @@ final class InMemoryModuleFinder implements ModuleFinder {
     }
 
     private static ModuleReference reference(Archive.Jar jar) {
-        Map<String, byte[]> entries = jar.entries();
-        Set<String> packages = packages(entries);
-        byte[] moduleInfo = entries.get("module-info.class");
+        Set<String> packages = packages(jar.names());
+        byte[] moduleInfo = jar.open("module-info.class");
         ModuleDescriptor descriptor = moduleInfo != null
                 ? ModuleDescriptor.read(ByteBuffer.wrap(moduleInfo), () -> packages)
-                : automatic(jar.name(), entries, packages);
-        URI location = URI.create(MemoryUrlRegistry.SCHEME + ":/module/" + jar.name());
-        return new ModuleReference(descriptor, location) {
+                : automatic(jar, packages);
+        // The location is metadata only (resources are served through the reader's jar:/file: URLs), so an
+        // absent location is fine.
+        return new ModuleReference(descriptor, null) {
             @Override
             public ModuleReader open() {
-                return new MapModuleReader(entries);
+                return new ArchiveModuleReader(jar);
             }
         };
     }
 
-    private static ModuleDescriptor automatic(String fileName, Map<String, byte[]> entries, Set<String> packages) {
-        ModuleDescriptor.Builder builder = ModuleDescriptor.newAutomaticModule(automaticName(fileName, entries));
+    private static ModuleDescriptor automatic(Archive.Jar jar, Set<String> packages) {
+        ModuleDescriptor.Builder builder = ModuleDescriptor.newAutomaticModule(automaticName(jar));
         if (!packages.isEmpty()) {
             builder.packages(packages);
         }
-        for (Map.Entry<String, byte[]> entry : entries.entrySet()) {
-            String name = entry.getKey();
+        for (String name : jar.names()) {
             if (name.startsWith(SERVICES) && name.indexOf('/', SERVICES.length()) == -1) {
                 String service = name.substring(SERVICES.length());
-                List<String> providers = providers(entry.getValue());
+                List<String> providers = providers(jar.open(name));
                 if (!service.isEmpty() && !providers.isEmpty()) {
                     try {
                         builder.provides(service, providers);
@@ -80,8 +79,8 @@ final class InMemoryModuleFinder implements ModuleFinder {
         return builder.build();
     }
 
-    private static String automaticName(String fileName, Map<String, byte[]> entries) {
-        byte[] manifestBytes = entries.get("META-INF/MANIFEST.MF");
+    private static String automaticName(Archive.Jar jar) {
+        byte[] manifestBytes = jar.open("META-INF/MANIFEST.MF");
         if (manifestBytes != null) {
             try {
                 String declared = new Manifest(new ByteArrayInputStream(manifestBytes))
@@ -94,7 +93,8 @@ final class InMemoryModuleFinder implements ModuleFinder {
                 // Fall through to file-name derivation.
             }
         }
-        String name = fileName.endsWith(".jar") ? fileName.substring(0, fileName.length() - 4) : fileName;
+        String name = jar.name();
+        name = name.endsWith(".jar") ? name.substring(0, name.length() - 4) : name;
         Matcher version = DASH_VERSION.matcher(name);
         if (version.find()) {
             name = name.substring(0, version.start());
@@ -109,9 +109,9 @@ final class InMemoryModuleFinder implements ModuleFinder {
         return name;
     }
 
-    private static Set<String> packages(Map<String, byte[]> entries) {
+    private static Set<String> packages(List<String> names) {
         Set<String> packages = new HashSet<>();
-        for (String name : entries.keySet()) {
+        for (String name : names) {
             if (!name.endsWith(".class") || name.equals("module-info.class") || name.startsWith("META-INF/")) {
                 continue;
             }

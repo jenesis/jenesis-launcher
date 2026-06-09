@@ -8,30 +8,35 @@
 A bootstrap for **executable jars** produced by Jenesis. The launcher is shaded
 into the jar root and run as its `Main-Class`, so `java -jar foo.jar` starts the application - while
 **retaining full Java modularity**. Modular dependencies are resolved into a fresh
-`java.lang.ModuleLayer`; non-modular dependencies become an in-memory class path. Nothing is exploded
-into a flat jar and nothing is extracted to disk: the nested jars are read in place, in memory.
+`java.lang.ModuleLayer`; non-modular dependencies become the unnamed module of the same loader. Each
+dependency is exploded into its own subfolder of the outer jar, and the launcher reads class and resource
+bytes straight from the still-open jar on demand - nothing is merged into a flat jar, held in memory, or
+extracted to disk.
 
 ## Why not a classic "fat jar"?
 
-The Maven-Shade approach unpacks every dependency and merges their class files into one flat jar. That
-destroys exactly what Jenesis cares about: `module-info.class` files collide, `META-INF/services`
-entries must be merged by hand, signatures break, and there is no way to reconstruct a module graph at
-runtime. This launcher keeps each dependency as an intact **nested jar**, so module identity,
-`module-info`, service files and signatures all survive untouched.
+The Maven-Shade approach unpacks every dependency and merges their class files into one **flat** jar.
+That destroys exactly what Jenesis cares about: `module-info.class` files collide, `META-INF/services`
+entries must be merged by hand, and there is no way to reconstruct a module graph at runtime. This
+launcher also explodes each dependency, but into **its own subfolder** (`classpath/<dep>/…`,
+`modulepath/<mod>/…`), so nothing is merged: each dependency keeps its own `module-info`, service files
+and resources, and the module graph is reconstructed from the subfolders. Because every class is then a
+direct entry of the outer jar, the launcher reads it on demand with a plain `java.util.zip.ZipFile` - no
+nested-jar trickery, and the dependencies' bytes never sit in the heap.
 
 The result is faithful to what `java -p modulepath -cp classpath -m mainModule/mainClass` would have
 done - reconstructed in process:
 
-* **Modular and automatic jars** (those with a `module-info.class` or an `Automatic-Module-Name`, the
-  same ones `PathPlacement.INFERRED` routes to the module path) are resolved by an in-memory
-  `ModuleFinder` and defined into a child `ModuleLayer`. The boot layer is immutable, so this is the
-  only supported way to add them at runtime, and the right one: they stay real named modules.
-* **Non-modular jars** become the unnamed module of that same loader - the analogue of what `-cp`
+* **Modular and automatic dependencies** (those with a `module-info.class` or an `Automatic-Module-Name`,
+  the same ones `PathPlacement.INFERRED` routes to the module path) are resolved by `InMemoryModuleFinder`
+  and defined into a child `ModuleLayer`. The boot layer is immutable, so this is the only supported way to
+  add them at runtime, and the right one: they stay real named modules.
+* **Non-modular dependencies** become the unnamed module of that same loader - the analogue of what `-cp`
   produces.
-* A **single in-memory loader** hosts both the named modules and the unnamed module, exactly as one
-  application loader does under `java -p modulepath -cp classpath`. So automatic modules can read the
-  class path while strict named modules cannot, and a package owned by a module shadows the same
-  package on the class path - the JDK's own rules.
+* A **single loader** hosts both the named modules and the unnamed module, exactly as one application
+  loader does under `java -p modulepath -cp classpath`. So automatic modules can read the class path
+  while strict named modules cannot, and a package owned by a module shadows the same package on the
+  class path - the JDK's own rules.
 
 ## Executable-jar layout
 
@@ -40,22 +45,21 @@ The bundling step shades this launcher into the jar root and lays the applicatio
 ```
 foo.jar
 ├── META-INF/MANIFEST.MF                                  Main-Class: build.jenesis.launcher.Launcher
-├── META-INF/services/
-│   └── java.net.spi.URLStreamHandlerProvider             (shaded from the launcher)
 ├── build/jenesis/launcher/*.class                        the launcher itself (unnamed module at run time)
 ├── application.properties                                mainClass=..., mainModule=..., agentClass=...
 ├── classpath/
-│   └── *.jar                                             non-modular dependencies
+│   └── <dependency-jar-name>/...                         a non-modular dependency, exploded
 └── modulepath/
-    └── *.jar                                             modular and automatic dependencies
+    └── <module-jar-name>/...                             a modular or automatic dependency, exploded
 ```
 
 `application.properties` is the exact file the previous `Bundle` step already wrote
 (`mainClass`, when modular `mainModule`, and optionally `agentClass`), so the bundling step only has
 to:
 
-1. copy the launcher's own classes and its `META-INF/services` entry into the jar root;
-2. keep writing `application.properties`, `classpath/*.jar` and `modulepath/*.jar` as before;
+1. copy the launcher's own classes into the jar root;
+2. explode each dependency into `classpath/<name>/` or `modulepath/<name>/`, where `<name>` is the
+   original jar file name (so automatic-module naming is unchanged);
 3. set the manifest `Main-Class` to `build.jenesis.launcher.Launcher`;
 4. when `agentClass` is present, add `Launcher-Agent-Class: build.jenesis.launcher.LauncherAgent` to the
    manifest (see [Bundled Java agents](#bundled-java-agents)).
@@ -64,10 +68,12 @@ to:
 
 `build.jenesis.launcher.Launcher#main` (or `Launcher#run(Path, String[])` when embedding):
 
-1. locates the running jar via its `CodeSource` and reads it with `Archive` (a jar file or an exploded
+1. locates the running jar via its `CodeSource` and opens it with `Archive` (a jar file or an exploded
    directory both work);
-2. reads `application.properties` and every nested jar fully into memory;
-3. builds a single `InMemoryClassLoader` over `classpath/` (its unnamed module);
+2. reads `application.properties` and indexes the entry names of each `classpath/<dep>/` and
+   `modulepath/<mod>/` subfolder - bytes are read later, on demand;
+3. builds a single `InMemoryClassLoader` over the `classpath/` subfolders (its unnamed module), holding
+   no bytes;
 4. if there are `modulepath/` jars, resolves them with `InMemoryModuleFinder` and defines a child layer
    via `ModuleLayer.defineModules(...)`, mapping every module to that same loader; when a `mainModule`
    is declared, the returned `Controller` grants the launcher access to the main package - so `main` is
@@ -96,7 +102,8 @@ the class path or the module path - the launcher builds the module layer even fo
 application, so a module-path agent is reachable either way.
 
 The catch is the `Instrumentation`: `-javaagent:foo.jar` resolves a `Premain-Class` from the agent jar's
-*own* class path, which never includes the nested jars, so a bundled agent cannot be passed that way. The
+*own* class path, which never includes the bundled dependencies, so a bundled agent cannot be passed that
+way. The
 launcher therefore ships [`LauncherAgent`](sources/build/jenesis/launcher/LauncherAgent.java) as the one
 agent the JVM does know about. Referencing it from the executable jar's manifest captures a real
 `Instrumentation` that the launcher then hands to every bundled agent:
@@ -113,24 +120,24 @@ and calls its `agentmain` with the `Instrumentation`. Capabilities are read from
 any of these attributes no `Instrumentation` is captured, and only agents that declare `premain(String)`
 can run.
 
-### Reading nested jars in memory
+### Reading the bundle on demand
 
-The default `ModuleFinder.of(Path...)` and `URLClassLoader` cannot address a jar nested inside another
-jar, so the launcher implements its own:
+Because each dependency is exploded into a subfolder, every class and resource is a direct entry of the
+outer jar, so the launcher reads each one only when first needed - no nested-jar addressing required:
 
-* `InMemoryClassLoader` is the single loader for everything: it defines class-path classes (its unnamed
-  module) and module classes straight from the in-memory bytes, serves module resources through
-  `findResource(module, name)` so `Class#getResourceAsStream` works inside a module, and exposes
-  class-path resources via the `jenesismem:` URL scheme so that `ClassLoader#getResources` - and
-  therefore `ServiceLoader` for class-path providers - returns openable URLs.
-* `InMemoryModuleFinder` builds a `ModuleDescriptor` per jar (read from `module-info.class`, or derived
-  for automatic modules from `Automatic-Module-Name` / the file name, with `META-INF/services`
-  providers scanned in), backed by a `MapModuleReader` that serves entries from memory.
-* `MemoryUrlStreamHandlerProvider` serves the `jenesismem:` scheme. It is required because the JDK
-  resolves module resources (including `Class#getResourceAsStream` for a custom layer's loader) through
-  `ModuleReader#find` → `URI#toURL`, which only works if a handler is registered for the scheme. It is
-  registered via `META-INF/services` when shaded onto the class path, and via the module descriptor's
-  `provides` clause when the launcher runs as a module. It is inert for every other scheme.
+* `Archive` opens the outer jar (a `java.util.zip.ZipFile`) or the exploded directory once, indexes the
+  entry names, and groups them by `classpath/<name>/` and `modulepath/<name>/` into lazy `Jar` handles.
+  Each handle reads an entry's bytes on demand and hands out a standard `jar:`/`file:` URL for it.
+* `InMemoryClassLoader` is the single loader for everything. It holds no class or resource bytes - only
+  the `Jar` handles and a package-to-module index - and reads (then discards) a class's bytes from the
+  open jar when the VM asks for it. Class-path resources are returned as `jar:`/`file:` URLs, so
+  `ClassLoader#getResources` - and therefore `ServiceLoader` for class-path providers - works with the
+  JDK's own handlers.
+* `InMemoryModuleFinder` builds a `ModuleDescriptor` per module (read from `module-info.class`, or derived
+  for automatic modules from `Automatic-Module-Name` / the original jar file name, with `META-INF/services`
+  providers scanned in), backed by an `ArchiveModuleReader` whose `find` returns each entry's `jar:`/`file:`
+  URL - so `Class#getResourceAsStream` for a class in the custom layer's loader resolves through the JDK's
+  standard handlers, with no custom URL scheme.
 
 ## Limitations
 
@@ -141,9 +148,9 @@ The following are worth knowing before bundling an application.
   defined straight from their in-memory bytes (`defineClass` with no `ProtectionDomain`), so
   `getClass().getProtectionDomain().getCodeSource()` is `null` for bundled code - the common idiom of
   locating "my own jar" through the code source returns nothing (only the launcher itself can, since it
-  is loaded by the system loader from the outer jar). JAR signatures are **not verified** at load: the
-  nested jars keep their signature blocks on disk, but the bytes are loaded unchecked. **Sealed packages
-  are not enforced** either.
+  is loaded by the system loader from the outer jar). JAR signatures are **not verified** at load (a
+  dependency's signature files are exploded as ordinary entries and ignored), and **sealed packages are
+  not enforced** either.
 
 * **Multi-release jars are not honored.** A class is always resolved from its base entry
   (`pkg/Cls.class`); entries under `META-INF/versions/<n>/` and the `Multi-Release: true` manifest
@@ -174,17 +181,16 @@ The following are worth knowing before bundling an application.
   `Package#getImplementationVersion`, `getSpecificationVersion` and similar return `null` for bundled
   code.
 
-* **Everything is held in memory.** Every nested jar is read fully into memory and kept for the process
-  lifetime, so heap use is proportional to the *uncompressed* size of all dependencies - more than
-  on-disk extraction for a large bundle. Resources resolved to a `jenesismem:` URL are additionally
-  retained in a process-wide registry that is never freed, which only matters for repeated in-process
-  launches (embedding, tests).
+* **Read on demand, but the jar stays open.** Class and resource bytes are read from the still-open outer
+  jar (or directory) when first needed and not retained, so heap use is roughly the entry-name index
+  rather than the dependencies' bytes. The trade-off is open file handles for the process lifetime: the
+  launcher's own `ZipFile`, plus a `JarURLConnection`-cached `JarFile` once resource URLs are opened.
 
 * **Native libraries.** A JNI library cannot be loaded from memory, so `InMemoryClassLoader` extracts a
   requested library to a temp file on demand (`findLibrary`), from a class-path jar or a bundled module
   (class path takes precedence). The temp file is removed on a normal exit (`deleteOnExit`) but leaks on
-  an abrupt kill, and if the same library name is bundled in more than one module the winner is
-  unspecified.
+  an abrupt kill; if the same library name is bundled in more than one module, the first module by jar
+  name wins.
 
 * **The boot layer is immutable.** Modular dependencies necessarily form a new layer rather than joining
   the system loader. This is by design and is the faithful way to keep them modular; it is also why the
@@ -203,10 +209,11 @@ java build/jenesis/Project.java          # compile, package, and run the tests
 java build/jenesis/Project.java stage    # stage the published artifact under target/stage
 ```
 
-The tests synthesise class files and nested-jar fixtures in memory with the JDK Class-File API and
-drive `Launcher#run` end to end (class-path apps, modular apps in their own layer, automatic-module
-naming, in-memory resource URLs, a module reading the class path, and bundled agents whose `premain`
-runs - in declaration order, with arguments - before the main class).
+The tests synthesise class files and exploded-bundle fixtures with the JDK Class-File API and drive
+`Launcher#run` end to end (class-path and modular apps, automatic-module naming, resources via
+`jar:`/`file:` URLs from both a jar and an exploded directory, a bundle path with spaces, a module
+reading the class path, split-package shadowing, native-library extraction, and bundled agents whose
+`premain` runs - in declaration order, with arguments - before the main class).
 
 ## Using it
 

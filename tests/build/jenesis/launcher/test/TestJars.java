@@ -225,19 +225,64 @@ final class TestJars {
         return jar(entries);
     }
 
-    /** Writes an outer executable-jar fixture combining the application properties and nested jars. */
+    /** Writes an outer executable-jar fixture, exploding each dependency into its own subfolder. */
     static void writeBundle(Path target,
                             Map<String, String> application,
                             Map<String, byte[]> classpath,
                             Map<String, byte[]> modulepath) throws IOException {
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("application.properties", applicationProperties(application));
+        explode(entries, "classpath/", classpath);
+        explode(entries, "modulepath/", modulepath);
+        Files.write(target, jar(entries));
+    }
+
+    /** Writes the same fixture as an exploded directory (for the directory-layout launch path). */
+    static void writeDirectory(Path root,
+                               Map<String, String> application,
+                               Map<String, byte[]> classpath,
+                               Map<String, byte[]> modulepath) throws IOException {
+        Files.createDirectories(root);
+        Files.write(root.resolve("application.properties"), applicationProperties(application));
+        explodeToDirectory(root.resolve("classpath"), classpath);
+        explodeToDirectory(root.resolve("modulepath"), modulepath);
+    }
+
+    private static byte[] applicationProperties(Map<String, String> application) throws IOException {
         Properties properties = new Properties();
         application.forEach(properties::setProperty);
-        ByteArrayOutputStream props = new ByteArrayOutputStream();
-        properties.store(props, null);
-        Map<String, byte[]> entries = new LinkedHashMap<>();
-        entries.put("application.properties", props.toByteArray());
-        classpath.forEach((name, bytes) -> entries.put("classpath/" + name, bytes));
-        modulepath.forEach((name, bytes) -> entries.put("modulepath/" + name, bytes));
-        Files.write(target, jar(entries));
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        properties.store(out, null);
+        return out.toByteArray();
+    }
+
+    private static void explode(Map<String, byte[]> entries, String section, Map<String, byte[]> jars) throws IOException {
+        for (Map.Entry<String, byte[]> jar : jars.entrySet()) {
+            String prefix = section + jar.getKey() + "/";
+            try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(jar.getValue()))) {
+                ZipEntry entry;
+                while ((entry = zip.getNextEntry()) != null) {
+                    if (!entry.isDirectory()) {
+                        entries.put(prefix + entry.getName(), zip.readAllBytes());
+                    }
+                }
+            }
+        }
+    }
+
+    private static void explodeToDirectory(Path base, Map<String, byte[]> jars) throws IOException {
+        for (Map.Entry<String, byte[]> jar : jars.entrySet()) {
+            Path group = base.resolve(jar.getKey());
+            try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(jar.getValue()))) {
+                ZipEntry entry;
+                while ((entry = zip.getNextEntry()) != null) {
+                    if (!entry.isDirectory()) {
+                        Path file = group.resolve(entry.getName());
+                        Files.createDirectories(file.getParent());
+                        Files.write(file, zip.readAllBytes());
+                    }
+                }
+            }
+        }
     }
 }

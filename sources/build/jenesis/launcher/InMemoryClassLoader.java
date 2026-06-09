@@ -3,23 +3,23 @@ package build.jenesis.launcher;
 import module java.base;
 
 /**
- * The single in-memory loader for every nested jar in an executable jar - both the {@code classpath/}
- * jars (its unnamed module) and the {@code modulepath/} modules (defined to it as named modules through
+ * The single loader for every dependency in an executable jar - both the {@code classpath/} jars (its
+ * unnamed module) and the {@code modulepath/} modules (defined to it as named modules through
  * {@link ModuleLayer#defineModules}). This mirrors how a real {@code java -p modulepath -cp classpath}
  * launch works: one application loader hosts the named modules and the unnamed module together, with the
  * {@link ModuleLayer} as metadata on top.
  *
- * <p>Class-path jars are merged into a flat {@code name -> bytes} map; on a clash the first jar in
- * iteration order wins, matching class-path precedence. Module classes and resources are read on demand
- * through the {@link MapModuleReader}s the {@link InMemoryModuleFinder} already built, so no bytes are
- * duplicated. A package owned by a bundled module is served only from that module: a same-named package
- * on the class path is <em>shadowed</em> (invisible), exactly as {@code java -p ... -cp ...} does.</p>
+ * <p>It holds no class or resource bytes - only the {@link Archive.Jar} handles and a package-to-module
+ * index. Class and resource bytes are read from the still-open outer jar (or directory) on demand and
+ * discarded after {@link #defineClass}. On the class path the first jar in iteration order wins, matching
+ * class-path precedence; a package owned by a bundled module is served only from that module, so a
+ * same-named package on the class path is shadowed - the JDK's own rule for {@code java -p ... -cp ...}.</p>
  *
- * <p>Resources are exposed through the {@code jenesismem:} URL scheme so {@link ClassLoader#getResources}
- * - and therefore {@link java.util.ServiceLoader} for class-path providers - returns openable URLs;
- * {@link #findResource(String, String)} serves module resources so {@link Class#getResourceAsStream}
- * keeps working for a class in a module. Native libraries cannot be loaded from memory, so
- * {@link #findLibrary(String)} extracts a requested library - from a class-path jar or a bundled
+ * <p>Resources are real entries of a real file, so {@link #findResource(String)} and
+ * {@link #findResource(String, String)} hand back standard {@code jar:}/{@code file:} URLs that the JDK's
+ * own handlers open - which is what {@link ClassLoader#getResources} (hence {@link java.util.ServiceLoader})
+ * and {@link Class#getResourceAsStream} for a module class need. Native libraries cannot be loaded from
+ * memory, so {@link #findLibrary(String)} extracts a requested library - from a class-path jar or a bundled
  * module - to a temp file on demand.</p>
  */
 final class InMemoryClassLoader extends ClassLoader {
@@ -28,26 +28,16 @@ final class InMemoryClassLoader extends ClassLoader {
         registerAsParallelCapable();
     }
 
-    private final Map<String, byte[]> classes = new HashMap<>();
-    private final Map<String, List<byte[]>> resources = new HashMap<>();
-    private final Map<String, List<URL>> resourceUrls = new ConcurrentHashMap<>();
+    private final List<Archive.Jar> classpath;
     private final Map<String, String> packageToModule = new HashMap<>();
-    private final Map<String, ModuleReader> readers = new HashMap<>();
+    private final Map<String, ModuleReader> readers = new LinkedHashMap<>();
 
     InMemoryClassLoader(List<Archive.Jar> classpath, InMemoryModuleFinder finder, ClassLoader parent)
             throws IOException {
         super("jenesis", parent);
-        for (Archive.Jar jar : classpath) {
-            for (Map.Entry<String, byte[]> entry : jar.entries().entrySet()) {
-                String name = entry.getKey();
-                byte[] data = entry.getValue();
-                resources.computeIfAbsent(name, _ -> new ArrayList<>()).add(data);
-                if (name.endsWith(".class")) {
-                    classes.putIfAbsent(name, data);
-                }
-            }
-        }
+        this.classpath = classpath;
         if (finder != null) {
+            // Finder order is sorted by jar name, so a LinkedHashMap keeps the native-library winner stable.
             for (ModuleReference reference : finder.findAll()) {
                 String module = reference.descriptor().name();
                 readers.put(module, reference.open());
@@ -73,7 +63,7 @@ final class InMemoryClassLoader extends ClassLoader {
             // class to its module automatically; do not definePackage for a module package.
             return defineClass(name, data, 0, data.length);
         }
-        byte[] data = classes.get(resource);
+        byte[] data = classpathResource(resource);
         if (data == null) {
             throw new ClassNotFoundException(name);
         }
@@ -113,42 +103,43 @@ final class InMemoryClassLoader extends ClassLoader {
         if (reader == null) {
             return null;
         }
-        // The Module/Class layer has already gated encapsulation before calling this, so serve whatever
-        // the reader has. The URI points into the MemoryUrlRegistry, so its toURL() is openable.
+        // The Module/Class layer has already gated encapsulation before calling this, so serve whatever the
+        // reader has; its find() yields a jar:/file: URI that the JDK's own handlers open.
         Optional<URI> uri = reader.find(name);
-        if (uri.isEmpty()) {
-            return null;
-        }
-        return uri.get().toURL();
+        return uri.isPresent() ? uri.get().toURL() : null;
     }
 
     @Override
     protected URL findResource(String name) {
-        List<URL> urls = urls(name);
-        return urls.isEmpty() ? null : urls.getFirst();
+        for (Archive.Jar jar : classpath) {
+            URL url = jar.url(name);
+            if (url != null) {
+                return url;
+            }
+        }
+        return null;
     }
 
     @Override
     protected Enumeration<URL> findResources(String name) {
-        return Collections.enumeration(urls(name));
+        List<URL> urls = new ArrayList<>();
+        for (Archive.Jar jar : classpath) {
+            URL url = jar.url(name);
+            if (url != null) {
+                urls.add(url);
+            }
+        }
+        return Collections.enumeration(urls);
     }
 
-    private List<URL> urls(String name) {
-        List<byte[]> data = resources.get(name);
-        if (data == null) {
-            return List.of();
-        }
-        return resourceUrls.computeIfAbsent(name, _ -> {
-            List<URL> urls = new ArrayList<>(data.size());
-            for (byte[] bytes : data) {
-                try {
-                    urls.add(MemoryUrlRegistry.register(bytes).toURL());
-                } catch (MalformedURLException e) {
-                    throw new IllegalStateException("Failed to expose resource " + name, e);
-                }
+    private byte[] classpathResource(String name) {
+        for (Archive.Jar jar : classpath) {
+            byte[] data = jar.open(name);
+            if (data != null) {
+                return data;
             }
-            return urls;
-        });
+        }
+        return null;
     }
 
     private byte[] moduleResource(String module, String name) {
@@ -177,10 +168,12 @@ final class InMemoryClassLoader extends ClassLoader {
     @Override
     protected String findLibrary(String name) {
         String mapped = System.mapLibraryName(name);
-        // Class-path jars take precedence, then the bundled modules.
-        for (Map.Entry<String, List<byte[]>> entry : resources.entrySet()) {
-            if (matchesLibrary(entry.getKey(), mapped)) {
-                return extractLibrary(mapped, entry.getValue().getFirst());
+        // Class path takes precedence, then the bundled modules (deterministic via the LinkedHashMap).
+        for (Archive.Jar jar : classpath) {
+            for (String resource : jar.names()) {
+                if (matchesLibrary(resource, mapped)) {
+                    return extractLibrary(mapped, jar.open(resource));
+                }
             }
         }
         for (Map.Entry<String, ModuleReader> entry : readers.entrySet()) {

@@ -64,7 +64,7 @@ class LauncherTest {
     }
 
     @Test
-    void loadsResourcesThroughInMemoryUrl() throws Exception {
+    void loadsClassPathResource() throws Exception {
         Path bundle = directory.resolve("resource-app.jar");
         Map<String, byte[]> entries = new LinkedHashMap<>();
         entries.put("demo/res/Main.class", TestJars.readResourceMain("demo.res.Main", "greeting.txt"));
@@ -247,6 +247,45 @@ class LauncherTest {
         assertThatThrownBy(() -> launch(bundle))
                 .isInstanceOf(UnsatisfiedLinkError.class)
                 .hasMessageContaining("jenesis-");
+    }
+
+    @Test
+    void runsModuleResourceFromExplodedDirectory() throws Exception {
+        // The directory layout - classpath/<dep>/ and modulepath/<mod>/ as real folders, served via file: URLs.
+        Path bundle = directory.resolve("exploded");
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("demo/modres/Main.class", TestJars.classResourceMain("demo.modres.Main", "/greeting.txt"));
+        entries.put("greeting.txt", "hello".getBytes(StandardCharsets.UTF_8));
+        TestJars.writeDirectory(bundle,
+                Map.of("mainModule", "modres", "mainClass", "demo.modres.Main"),
+                Map.of(),
+                Map.of("modres.jar", TestJars.jar(entries)));
+
+        String key = "jenesis.test.directory.resource";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("hello");
+    }
+
+    @Test
+    void resolvesResourcesWhenBundlePathHasSpaces() throws Exception {
+        // A space in both the bundle path and the resource name forces correct jar: URL percent-encoding.
+        Path folder = Files.createDirectories(directory.resolve("with space"));
+        Path bundle = folder.resolve("module app.jar");
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("demo/modres/Main.class", TestJars.classResourceMain("demo.modres.Main", "/with space.txt"));
+        entries.put("with space.txt", "hello".getBytes(StandardCharsets.UTF_8));
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "modres", "mainClass", "demo.modres.Main"),
+                Map.of(),
+                Map.of("modres.jar", TestJars.jar(entries)));
+
+        String key = "jenesis.test.spaced.resource";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("hello");
     }
 
     @Test
