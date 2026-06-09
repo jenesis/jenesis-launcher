@@ -120,6 +120,22 @@ and calls its `agentmain` with the `Instrumentation`. Capabilities are read from
 any of these attributes no `Instrumentation` is captured, and only agents that declare `premain(String)`
 can run.
 
+### Relaxing module access
+
+A bundled module sometimes needs reflective access a framework expects but its `module-info` does not
+declare. Three optional properties grant it - the in-bundle equivalent of `--add-exports` / `--add-opens`
+/ `--add-reads`, applied to the bundled modules through the layer's `Controller`:
+
+```
+addExports=some.module/some.pkg=ALL-UNNAMED
+addOpens=some.module/some.pkg=other.module,yet.another
+addReads=some.module=java.sql
+```
+
+Directives within a property are separated by `;` and targets within a directive by `,`; a target is a
+module name or `ALL-UNNAMED`. The source must be one of the bundled modules (the `Controller` can only
+break encapsulation of the modules it defined); targets may be bundled, boot, or the unnamed module.
+
 ### Reading the bundle on demand
 
 Because each dependency is exploded into a subfolder, every class and resource is a direct entry of the
@@ -156,18 +172,12 @@ The following are worth knowing before bundling an application.
   packages.
 
 * **The module graph is fixed to the bundle plus the default boot modules.** Every bundled module is
-  bound as a root against the boot layer, but there is no in-bundle way to pull in JDK modules that are
-  not resolved by default (for example `jdk.incubator.*`, or modules with only qualified exports) or to
-  add `reads` / `opens` / `exports` edges. A bundled module that `requires` an unresolved JDK module
-  fails at startup. The fix is on the `java` command line, which augments the boot layer that the child
-  layer reads:
-
-  ```
-  java --add-modules jdk.incubator.vector --add-opens some.module/some.pkg=ALL-UNNAMED -jar foo.jar
-  ```
-
-  The launcher itself only opens the main package to itself, so it can invoke `main` exactly as
-  `java -m module/Class` does.
+  bound as a root against the boot layer; you can add `reads` / `opens` / `exports` edges for bundled
+  modules with the [`addReads` / `addOpens` / `addExports`](#relaxing-module-access) properties, but there
+  is no in-bundle way to pull in JDK modules that are not resolved by default (for example
+  `jdk.incubator.*`, or modules with only qualified exports). A bundled module that `requires` an
+  unresolved JDK module fails at startup; the fix is `java --add-modules jdk.incubator.vector -jar
+  foo.jar`, which augments the boot layer that the child layer reads.
 
 * **Module-internal resources are not on the flat class-loader resource API.** `ClassLoader#getResource`
   and `getResources` on the loader serve only class-path resources. A resource inside a module is
@@ -207,8 +217,8 @@ The tests synthesise class files and exploded-bundle fixtures with the JDK Class
 `Launcher#run` end to end (class-path and modular apps, automatic-module naming, resources via
 `jar:`/`file:` URLs from both a jar and an exploded directory, a bundle path with spaces, a module
 reading the class path, split-package shadowing, native-library extraction, multi-release class selection,
-package metadata and sealing from the manifest, and bundled agents whose `premain` runs - in declaration
-order, with arguments - before the main class).
+package metadata and sealing from the manifest, `addExports`/`addOpens`/`addReads` grants, and bundled
+agents whose `premain` runs - in declaration order, with arguments - before the main class).
 
 ## Using it
 

@@ -94,6 +94,10 @@ public final class Launcher {
             }
         }
 
+        if (controller != null) {
+            grantAccess(controller, layer, loader, archive.application());
+        }
+
         Thread.currentThread().setContextClassLoader(loader);
         // Run agents before the main class is loaded, mirroring `-javaagent`: a ClassFileTransformer a
         // premain registers must be in place for the JVM to apply it to the main class being defined.
@@ -165,6 +169,85 @@ public final class Launcher {
     private static String packageOf(String className) {
         int dot = className.lastIndexOf('.');
         return dot == -1 ? "" : className.substring(0, dot);
+    }
+
+    /**
+     * Applies the optional {@code addExports}, {@code addOpens} and {@code addReads} properties to the
+     * bundled modules through the layer's {@link ModuleLayer.Controller} - the in-bundle equivalent of the
+     * {@code --add-exports} / {@code --add-opens} / {@code --add-reads} command-line options. Directives are
+     * separated by {@code ;}; targets within a directive by {@code ,}. {@code addExports}/{@code addOpens}
+     * read {@code module/package=target...}, {@code addReads} reads {@code module=target...}; a target is a
+     * module name or {@code ALL-UNNAMED}.
+     */
+    private static void grantAccess(ModuleLayer.Controller controller, ModuleLayer layer, ClassLoader loader,
+                                    Properties application) {
+        for (Directive directive : directives(application.getProperty("addExports"), true)) {
+            controller.addExports(source(layer, directive.module()), directive.packageName(),
+                    target(directive.target(), layer, loader));
+        }
+        for (Directive directive : directives(application.getProperty("addOpens"), true)) {
+            controller.addOpens(source(layer, directive.module()), directive.packageName(),
+                    target(directive.target(), layer, loader));
+        }
+        for (Directive directive : directives(application.getProperty("addReads"), false)) {
+            controller.addReads(source(layer, directive.module()), target(directive.target(), layer, loader));
+        }
+    }
+
+    private record Directive(String module, String packageName, String target) {
+    }
+
+    private static List<Directive> directives(String value, boolean qualified) {
+        List<Directive> directives = new ArrayList<>();
+        if (value == null || value.isBlank()) {
+            return directives;
+        }
+        for (String entry : value.split(";")) {
+            String specification = entry.strip();
+            if (specification.isEmpty()) {
+                continue;
+            }
+            int equals = specification.indexOf('=');
+            if (equals == -1) {
+                throw new IllegalStateException("Malformed access directive (expected '='): " + specification);
+            }
+            String left = specification.substring(0, equals).strip();
+            String module;
+            String packageName;
+            if (qualified) {
+                int slash = left.indexOf('/');
+                if (slash == -1) {
+                    throw new IllegalStateException(
+                            "Malformed addExports/addOpens (expected 'module/package'): " + left);
+                }
+                module = left.substring(0, slash).strip();
+                packageName = left.substring(slash + 1).strip();
+            } else {
+                module = left;
+                packageName = null;
+            }
+            for (String target : specification.substring(equals + 1).split(",")) {
+                String trimmed = target.strip();
+                if (!trimmed.isEmpty()) {
+                    directives.add(new Directive(module, packageName, trimmed));
+                }
+            }
+        }
+        return directives;
+    }
+
+    private static Module source(ModuleLayer layer, String module) {
+        return layer.findModule(module).orElseThrow(() ->
+                new IllegalStateException("Module named by addExports/addOpens/addReads is not bundled: " + module));
+    }
+
+    private static Module target(String target, ModuleLayer layer, ClassLoader loader) {
+        if (target.equals("ALL-UNNAMED")) {
+            return loader.getUnnamedModule();
+        }
+        return layer.findModule(target)
+                .or(() -> ModuleLayer.boot().findModule(target))
+                .orElseThrow(() -> new IllegalStateException("Target module not found: " + target));
     }
 
     private static void invokeMain(Class<?> type, String[] args) throws Exception {

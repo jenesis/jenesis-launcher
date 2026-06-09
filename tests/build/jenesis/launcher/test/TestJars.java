@@ -215,6 +215,33 @@ final class TestJars {
                 .return_());
     }
 
+    /** A {@code module-info.class} for an explicit module that requires {@code java.base} and exports nothing. */
+    static byte[] moduleInfo(String moduleName) {
+        return ClassFile.of().buildModule(ModuleAttribute.of(ModuleDesc.of(moduleName), builder ->
+                builder.requires(ModuleDesc.of("java.base"), ClassFile.ACC_MANDATED, null)));
+    }
+
+    /** A class with a {@code public static void run(String)} that runs {@code System.setProperty(arg, value)}. */
+    static byte[] runner(String binaryName, String value) {
+        return method(binaryName, "run", MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_String), code -> code
+                .aload(0)
+                .loadConstant(value)
+                .invokestatic(CD_System, "setProperty",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String, ConstantDescs.CD_String))
+                .pop()
+                .return_());
+    }
+
+    /** A class whose {@code main} directly calls {@code target.run(args[0])} - which needs {@code target}'s
+     * package exported to the caller. */
+    static byte[] callRunMain(String binaryName, String target) {
+        return main(binaryName, code -> code
+                .aload(0).iconst_0().aaload()
+                .invokestatic(ClassDesc.of(target), "run",
+                        MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_String))
+                .return_());
+    }
+
     private static byte[] main(String binaryName, Consumer<CodeBuilder> body) {
         return method(binaryName, "main",
                 MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_String.arrayType()), body);

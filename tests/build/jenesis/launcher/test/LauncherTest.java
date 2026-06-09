@@ -387,6 +387,47 @@ class LauncherTest {
     }
 
     @Test
+    void grantsModuleAccessFromProperties() throws Exception {
+        // demo.lib is an explicit module that exports nothing. addExports lets the class-path main call into
+        // it; addOpens and addReads exercise the same machinery (applied through the Controller, no error).
+        Path bundle = directory.resolve("access-app.jar");
+        Map<String, byte[]> module = new LinkedHashMap<>();
+        module.put("module-info.class", TestJars.moduleInfo("demo.lib"));
+        module.put("demo/lib/Tool.class", TestJars.runner("demo.lib.Tool", "granted"));
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.app.Main",
+                        "addExports", "demo.lib/demo.lib=ALL-UNNAMED",
+                        "addOpens", "demo.lib/demo.lib=ALL-UNNAMED",
+                        "addReads", "demo.lib=java.base"),
+                Map.of("app.jar",
+                        TestJars.classJar("demo.app.Main", TestJars.callRunMain("demo.app.Main", "demo.lib.Tool"))),
+                Map.of("lib.jar", TestJars.jar(module)));
+
+        String key = "jenesis.test.access";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("granted");
+    }
+
+    @Test
+    void deniesModuleAccessWithoutAddExports() throws Exception {
+        // The same bundle without addExports: the class-path main cannot reach the unexported package.
+        Path bundle = directory.resolve("denied-app.jar");
+        Map<String, byte[]> module = new LinkedHashMap<>();
+        module.put("module-info.class", TestJars.moduleInfo("demo.lib"));
+        module.put("demo/lib/Tool.class", TestJars.runner("demo.lib.Tool", "granted"));
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.app.Main"),
+                Map.of("app.jar",
+                        TestJars.classJar("demo.app.Main", TestJars.callRunMain("demo.app.Main", "demo.lib.Tool"))),
+                Map.of("lib.jar", TestJars.jar(module)));
+
+        assertThatThrownBy(() -> launch(bundle, "jenesis.test.denied"))
+                .isInstanceOf(IllegalAccessError.class);
+    }
+
+    @Test
     void rejectsBundleWithoutMainClass() throws Exception {
         Path bundle = directory.resolve("empty-app.jar");
         TestJars.writeBundle(bundle, Map.of(), Map.of(), Map.of());
