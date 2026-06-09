@@ -211,6 +211,45 @@ class LauncherTest {
     }
 
     @Test
+    void extractsNativeLibraryFromClassPathJar() throws Exception {
+        // We cannot load a real library, but reaching extraction (vs. "no <name> in java.library.path")
+        // proves findLibrary served it: the JVM then fails to load the bogus file and the error names the
+        // extracted temp file, whose name carries the launcher's "jenesis-" prefix.
+        String mapped = System.mapLibraryName("jenesiscp");
+        Path bundle = directory.resolve("native-cp-app.jar");
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("demo/nat/CpMain.class", TestJars.loadLibraryMain("demo.nat.CpMain", "jenesiscp"));
+        entries.put(mapped, "not a real native library".getBytes(StandardCharsets.UTF_8));
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.nat.CpMain"),
+                Map.of("native.jar", TestJars.jar(entries)),
+                Map.of());
+
+        assertThatThrownBy(() -> launch(bundle))
+                .isInstanceOf(UnsatisfiedLinkError.class)
+                .hasMessageContaining("jenesis-");
+    }
+
+    @Test
+    void extractsNativeLibraryFromModularJar() throws Exception {
+        // The unified loader now also extracts native libraries bundled inside a modular jar, lifting the
+        // old "modular jars are not handled" limitation. Same probe as the class-path case.
+        String mapped = System.mapLibraryName("jenesismod");
+        Path bundle = directory.resolve("native-module-app.jar");
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("demo/nat/Main.class", TestJars.loadLibraryMain("demo.nat.Main", "jenesismod"));
+        entries.put(mapped, "not a real native library".getBytes(StandardCharsets.UTF_8));
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "natmod", "mainClass", "demo.nat.Main"),
+                Map.of(),
+                Map.of("natmod.jar", TestJars.jar(entries)));
+
+        assertThatThrownBy(() -> launch(bundle))
+                .isInstanceOf(UnsatisfiedLinkError.class)
+                .hasMessageContaining("jenesis-");
+    }
+
+    @Test
     void rejectsBundleWithoutMainClass() throws Exception {
         Path bundle = directory.resolve("empty-app.jar");
         TestJars.writeBundle(bundle, Map.of(), Map.of(), Map.of());

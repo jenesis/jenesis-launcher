@@ -19,7 +19,8 @@ import module java.base;
  * - and therefore {@link java.util.ServiceLoader} for class-path providers - returns openable URLs;
  * {@link #findResource(String, String)} serves module resources so {@link Class#getResourceAsStream}
  * keeps working for a class in a module. Native libraries cannot be loaded from memory, so
- * {@link #findLibrary(String)} extracts a requested library to a temp file on demand.</p>
+ * {@link #findLibrary(String)} extracts a requested library - from a class-path jar or a bundled
+ * module - to a temp file on demand.</p>
  */
 final class InMemoryClassLoader extends ClassLoader {
 
@@ -176,19 +177,41 @@ final class InMemoryClassLoader extends ClassLoader {
     @Override
     protected String findLibrary(String name) {
         String mapped = System.mapLibraryName(name);
+        // Class-path jars take precedence, then the bundled modules.
         for (Map.Entry<String, List<byte[]>> entry : resources.entrySet()) {
-            String resource = entry.getKey();
-            if (resource.equals(mapped) || resource.endsWith("/" + mapped)) {
-                try {
-                    Path file = Files.createTempFile("jenesis-", "-" + mapped);
-                    file.toFile().deleteOnExit();
-                    Files.write(file, entry.getValue().getFirst());
-                    return file.toAbsolutePath().toString();
-                } catch (IOException e) {
-                    throw new UncheckedIOException("Failed to extract native library " + mapped, e);
+            if (matchesLibrary(entry.getKey(), mapped)) {
+                return extractLibrary(mapped, entry.getValue().getFirst());
+            }
+        }
+        for (Map.Entry<String, ModuleReader> entry : readers.entrySet()) {
+            String resource;
+            try (Stream<String> names = entry.getValue().list()) {
+                resource = names.filter(candidate -> matchesLibrary(candidate, mapped)).findFirst().orElse(null);
+            } catch (IOException _) {
+                continue;
+            }
+            if (resource != null) {
+                byte[] data = moduleResource(entry.getKey(), resource);
+                if (data != null) {
+                    return extractLibrary(mapped, data);
                 }
             }
         }
         return null;
+    }
+
+    private static boolean matchesLibrary(String resource, String mapped) {
+        return resource.equals(mapped) || resource.endsWith("/" + mapped);
+    }
+
+    private static String extractLibrary(String mapped, byte[] data) {
+        try {
+            Path file = Files.createTempFile("jenesis-", "-" + mapped);
+            file.toFile().deleteOnExit();
+            Files.write(file, data);
+            return file.toAbsolutePath().toString();
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to extract native library " + mapped, e);
+        }
     }
 }

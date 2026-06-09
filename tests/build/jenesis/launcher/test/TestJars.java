@@ -163,6 +163,15 @@ final class TestJars {
                 .return_());
     }
 
+    /** A class whose {@code main} runs {@code System.loadLibrary(library)}. */
+    static byte[] loadLibraryMain(String binaryName, String library) {
+        return main(binaryName, code -> code
+                .loadConstant(library)
+                .invokestatic(CD_System, "loadLibrary",
+                        MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_String))
+                .return_());
+    }
+
     private static byte[] main(String binaryName, Consumer<CodeBuilder> body) {
         return method(binaryName, "main",
                 MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_String.arrayType()), body);

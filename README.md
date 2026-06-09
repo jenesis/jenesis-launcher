@@ -134,9 +134,9 @@ jar, so the launcher implements its own:
 
 ## Limitations
 
-* **Native libraries.** A JNI library cannot be loaded from memory. `InMemoryClassLoader` extracts a
-  requested library from a class-path jar to a temp file on demand (`findLibrary`). Native libraries
-  bundled *inside a modular jar* are not handled; ship those modules unbundled if needed.
+* **Native libraries.** A JNI library cannot be loaded from memory, so `InMemoryClassLoader` extracts a
+  requested library to a temp file on demand (`findLibrary`). It is found in either a class-path jar or a
+  bundled module (class path takes precedence).
 * **The boot layer is immutable.** Modular dependencies necessarily form a new layer rather than
   joining the system loader. This is by design and is the faithful way to keep them modular.
 
