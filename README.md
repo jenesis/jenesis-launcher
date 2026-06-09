@@ -134,11 +134,65 @@ jar, so the launcher implements its own:
 
 ## Limitations
 
+The launcher reconstructs the module graph and class loading in memory, faithfully but not exhaustively.
+The following are worth knowing before bundling an application.
+
+* **Loaded classes carry no `CodeSource`, and signatures and sealing are not enforced.** Classes are
+  defined straight from their in-memory bytes (`defineClass` with no `ProtectionDomain`), so
+  `getClass().getProtectionDomain().getCodeSource()` is `null` for bundled code - the common idiom of
+  locating "my own jar" through the code source returns nothing (only the launcher itself can, since it
+  is loaded by the system loader from the outer jar). JAR signatures are **not verified** at load: the
+  nested jars keep their signature blocks on disk, but the bytes are loaded unchecked. **Sealed packages
+  are not enforced** either.
+
+* **Multi-release jars are not honored.** A class is always resolved from its base entry
+  (`pkg/Cls.class`); entries under `META-INF/versions/<n>/` and the `Multi-Release: true` manifest
+  attribute are ignored. A multi-release dependency therefore runs its base (lowest-Java) classes even on
+  a newer JDK, missing any version-specific variants it ships.
+
+* **The module graph is fixed to the bundle plus the default boot modules.** Every bundled module is
+  bound as a root against the boot layer, but there is no in-bundle way to pull in JDK modules that are
+  not resolved by default (for example `jdk.incubator.*`, or modules with only qualified exports) or to
+  add `reads` / `opens` / `exports` edges. A bundled module that `requires` an unresolved JDK module
+  fails at startup. The fix is on the `java` command line, which augments the boot layer that the child
+  layer reads:
+
+  ```
+  java --add-modules jdk.incubator.vector --add-opens some.module/some.pkg=ALL-UNNAMED -jar foo.jar
+  ```
+
+  The launcher itself only opens the main package to itself, so it can invoke `main` exactly as
+  `java -m module/Class` does.
+
+* **Module-internal resources are not on the flat class-loader resource API.** `ClassLoader#getResource`
+  and `getResources` on the loader serve only class-path resources. A resource inside a module is
+  reachable only through a class in that module (`Class#getResourceAsStream`) or `ServiceLoader`, matching
+  JPMS encapsulation - so `contextClassLoader.getResourceAsStream("some/module/internal.txt")` will not
+  find it.
+
+* **Package metadata is not reconstructed.** Packages are defined without manifest attributes, so
+  `Package#getImplementationVersion`, `getSpecificationVersion` and similar return `null` for bundled
+  code.
+
+* **Everything is held in memory.** Every nested jar is read fully into memory and kept for the process
+  lifetime, so heap use is proportional to the *uncompressed* size of all dependencies - more than
+  on-disk extraction for a large bundle. Resources resolved to a `jenesismem:` URL are additionally
+  retained in a process-wide registry that is never freed, which only matters for repeated in-process
+  launches (embedding, tests).
+
 * **Native libraries.** A JNI library cannot be loaded from memory, so `InMemoryClassLoader` extracts a
-  requested library to a temp file on demand (`findLibrary`). It is found in either a class-path jar or a
-  bundled module (class path takes precedence).
-* **The boot layer is immutable.** Modular dependencies necessarily form a new layer rather than
-  joining the system loader. This is by design and is the faithful way to keep them modular.
+  requested library to a temp file on demand (`findLibrary`), from a class-path jar or a bundled module
+  (class path takes precedence). The temp file is removed on a normal exit (`deleteOnExit`) but leaks on
+  an abrupt kill, and if the same library name is bundled in more than one module the winner is
+  unspecified.
+
+* **The boot layer is immutable.** Modular dependencies necessarily form a new layer rather than joining
+  the system loader. This is by design and is the faithful way to keep them modular; it is also why the
+  module graph is fixed as described above.
+
+Two behaviours are intentional rather than limitations: a package owned by a module **shadows** the same
+package on the class path (the JDK's own rule), and bundled agents need a manifest attribute to obtain an
+`Instrumentation` (see [Bundled Java agents](#bundled-java-agents)).
 
 ## Building
 
