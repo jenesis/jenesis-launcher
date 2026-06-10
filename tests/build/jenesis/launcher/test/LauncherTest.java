@@ -16,7 +16,7 @@ class LauncherTest {
     Path directory;
 
     // A throwaway self-signed EC certificate (CN=Jenesis Test Signer, O=Jenesis) as Base64 DER, used to
-    // exercise the signer-identity reconstruction from signatures.properties.
+    // exercise signer-identity reconstruction from a signature.<dep> entry in application.properties.
     private static final String TEST_SIGNER_CERT =
             "MIIBeDCCAR6gAwIBAgIJAK+PMEagHyyCMAoGCCqGSM49BAMDMDAxEDAOBgNVBAoTB0plbmVzaXMxHDAaBgNVBAMTE0plbm"
             + "VzaXMgVGVzdCBTaWduZXIwHhcNMjYwNjEwMTA1OTEzWhcNMzYwNjA3MTA1OTEzWjAwMRAwDgYDVQQKEwdKZW5lc2lzMR"
@@ -387,10 +387,10 @@ class LauncherTest {
     }
 
     @Test
-    void reconstructsSignerIdentityFromSignaturesProperties() throws Exception {
-        // A signed class-path dependency loses its signer when exploded; signatures.properties carries the
-        // signer certificate chain (Base64 PKCS#7), and the launcher reconstructs it onto the CodeSource so
-        // getCodeSource().getCertificates() reports the original signer.
+    void reconstructsSignerIdentityFromApplicationProperties() throws Exception {
+        // A signed class-path dependency loses its signer when exploded; a signature.<dep> entry in
+        // application.properties carries the signer certificate chain (Base64 PKCS#7), and the launcher
+        // reconstructs it onto the CodeSource so getCodeSource().getCertificates() reports the original signer.
         CertificateFactory factory = CertificateFactory.getInstance("X.509");
         X509Certificate certificate = (X509Certificate) factory.generateCertificate(
                 new ByteArrayInputStream(Base64.getDecoder().decode(TEST_SIGNER_CERT)));
@@ -400,8 +400,8 @@ class LauncherTest {
 
         Path bundle = directory.resolve("signed-app.jar");
         Map<String, byte[]> entries = new LinkedHashMap<>();
-        entries.put("application.properties", properties(Map.of("mainClass", "demo.sig.Main")));
-        entries.put("signatures.properties", properties(Map.of("app.jar", chain)));
+        entries.put("application.properties",
+                properties(Map.of("mainClass", "demo.sig.Main", "signature.app.jar", chain)));
         entries.put("classpath/app.jar/demo/sig/Main.class", TestJars.codeSourceSignerMain("demo.sig.Main"));
         Files.write(bundle, TestJars.jar(entries));
 
@@ -413,8 +413,8 @@ class LauncherTest {
     }
 
     @Test
-    void omitsSignersWithoutSignaturesProperties() throws Exception {
-        // The feature is strictly opt-in: with no signatures.properties the CodeSource carries no signers,
+    void omitsSignersWithoutSignatureProperty() throws Exception {
+        // The feature is strictly opt-in: with no signature.<dep> property the CodeSource carries no signers,
         // so getCertificates() is null and reading it throws.
         Path bundle = directory.resolve("unsigned-app.jar");
         Map<String, byte[]> entries = new LinkedHashMap<>();

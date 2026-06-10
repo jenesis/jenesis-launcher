@@ -205,20 +205,22 @@ break encapsulation of the modules it defined); targets may be bundled, boot, or
 
 A dependency that shipped as a *signed* jar loses its signer identity when exploded: its signature files
 (`META-INF/*.SF`, `*.RSA`/`*.DSA`/`*.EC`) become ordinary entries, so a class-path class would otherwise
-define with a `CodeSource` that has no signers. An optional `signatures.properties` at the bundle root
-restores it - keyed by the exploded dependency's name (its `classpath/<name>/` folder), valued with Base64
-of the signer's PKCS#7 certificate chain:
+define with a `CodeSource` that has no signers. Optional `signature.<dependency>` entries in
+`application.properties` restore it - the key suffix is the exploded dependency's name (its
+`classpath/<name>/` folder), the value is Base64 of the signer's PKCS#7 certificate chain:
 
 ```
-guava.jar=MIIF...                            # Base64 of the signer's certificate chain (PKCS#7)
+mainClass=com.example.Main
+signature.guava.jar=MIIF...                  # Base64 of the signer's certificate chain (PKCS#7)
 ```
 
-For each listed class-path dependency the launcher reconstructs a `CodeSigner` and attaches it to that
+For each such class-path dependency the launcher reconstructs a `CodeSigner` and attaches it to that
 dependency's `CodeSource`, so `getProtectionDomain().getCodeSource().getCodeSigners()` and
 `getCertificates()` report the original signer - the same attested reconstruction the launcher already does
 for a package's manifest metadata and sealing. This records the signer the bundler attested at build time;
 it is **not** a cryptographic re-verification of the bundled bytes, and it applies to class-path
-dependencies (module classes carry no `CodeSource`). Dependencies not listed are unaffected.
+dependencies (a module-path class carries no signers, as on a real module path). The Base64 value is ASCII,
+so it round-trips through the ISO-8859-1 properties file. Dependencies without an entry are unaffected.
 
 ### Reading the bundle on demand
 
@@ -259,9 +261,9 @@ The following are worth knowing before bundling an application.
   `Package#getImplementationVersion`, sealed packages, and `getProtectionDomain().getCodeSource()` all
   work. But it is not a standalone jar on disk, so the "open my own jar file" idiom still fails. **JAR
   signatures are not cryptographically verified** - a dependency's signature files are exploded as ordinary
-  entries; the optional [`signatures.properties`](#emulating-a-signed-jar) reconstructs a class-path
-  dependency's signer *identity* so `CodeSource#getCodeSigners`/`getCertificates` report it, but it attests
-  rather than re-verifies. A module class likewise carries a `CodeSource` - its module's exploded-folder URL,
+  entries; optional [`signature.<dep>` entries in `application.properties`](#emulating-a-signed-jar)
+  reconstruct a class-path dependency's signer *identity* so `CodeSource#getCodeSigners`/`getCertificates`
+  report it, but they attest rather than re-verify. A module class likewise carries a `CodeSource` - its module's exploded-folder URL,
   with no signers (as on a real module path) - though its packages are governed by the module system, not a
   manifest.
 
@@ -315,7 +317,7 @@ confined to the bundle root, a bundle path with spaces, module resources on the 
 honoring JPMS encapsulation (automatic-module and `META-INF/` resources served, a non-open package's
 resource hidden), a module reading the class path, split-package shadowing, native-library extraction,
 multi-release class selection,
-package metadata and sealing from the manifest, signer identity reconstructed from `signatures.properties`,
+package metadata and sealing from the manifest, signer identity reconstructed from a `signature.<dep>` property,
 a module class's `CodeSource` location, `addExports`/`addOpens`/`addReads` grants, bundled
 agents whose `premain` runs - in declaration order, with arguments - before the main class, and an agent
 bundle with no main started through `runAgents`).

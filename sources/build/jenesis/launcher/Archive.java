@@ -23,7 +23,6 @@ import module java.base;
 final class Archive implements Closeable {
 
     static final String APPLICATION = "application.properties";
-    static final String SIGNATURES = "signatures.properties";
     static final String CLASS_PATH = "classpath/";
     static final String MODULE_PATH = "modulepath/";
 
@@ -131,7 +130,6 @@ final class Archive implements Closeable {
     }
 
     private final Properties application = new Properties();
-    private final Properties signatures = new Properties();
     private final List<Jar> classpath = new ArrayList<>();
     private final List<Jar> modulepath = new ArrayList<>();
     private Source source;
@@ -151,11 +149,6 @@ final class Archive implements Closeable {
 
     Properties application() {
         return application;
-    }
-
-    /** The optional signer certificate chains by dependency name (see {@code signatures.properties}). */
-    Properties signatures() {
-        return signatures;
     }
 
     List<Jar> classpath() {
@@ -181,10 +174,6 @@ final class Archive implements Closeable {
         byte[] properties = source.open(APPLICATION);
         if (properties != null) {
             application.load(new ByteArrayInputStream(properties));
-        }
-        byte[] signed = source.open(SIGNATURES);
-        if (signed != null) {
-            signatures.load(new ByteArrayInputStream(signed));
         }
         Map<String, List<String>> classpathGroups = new LinkedHashMap<>();
         Map<String, List<String>> modulepathGroups = new LinkedHashMap<>();
