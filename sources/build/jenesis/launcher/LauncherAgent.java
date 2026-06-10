@@ -57,9 +57,12 @@ public final class LauncherAgent {
 
     private static void start(boolean attach, String arguments, Instrumentation instrumentation) throws Exception {
         LauncherAgent.instrumentation = instrumentation;
-        // For an application bundle (a mainClass is present) runAgents returns immediately and Launcher.run
-        // drives the agents; for an agent bundle it builds the loader and runs them here.
-        Launcher.runAgents(Launcher.location(), attach, arguments, instrumentation);
+        // Resolve the bundle from this class's own code source. For an application bundle (a mainClass is
+        // present) runAgents returns immediately and Launcher.run drives the agents; for an agent bundle it
+        // builds the loader and runs them here. Note that this shared class can serve only ONE agent bundle
+        // per JVM (the system loader loads it once); a bundle that must coexist with other agent bundles
+        // ships its own uniquely named Premain-Class delegating to Launcher.runAgents(ThatClass.class, ...).
+        Launcher.runAgents(LauncherAgent.class, attach, arguments, instrumentation);
     }
 
     /**

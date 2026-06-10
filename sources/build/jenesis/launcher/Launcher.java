@@ -84,6 +84,19 @@ public final class Launcher {
     }
 
     /**
+     * Bootstraps the agent bundle whose jar is {@code premainClass}'s code source. This lets several agent
+     * bundles coexist in one JVM: the JVM loads a {@code Premain-Class} by binary name only once, so a shared
+     * one cannot tell the bundles apart - but a bundle that ships its own uniquely named {@code Premain-Class}
+     * (a small generated class whose {@code premain}/{@code agentmain} just call this with its own class) is
+     * loaded on its own and resolves to its own jar, with its own {@code application.properties} and
+     * dependencies. Otherwise as {@link #runAgents(Path, boolean, String, Instrumentation)}.
+     */
+    public static void runAgents(Class<?> premainClass, boolean attach, String arguments,
+                                 Instrumentation instrumentation) throws Exception {
+        runAgents(location(premainClass), attach, arguments, instrumentation);
+    }
+
+    /**
      * Builds the single loader for a bundle: the {@code classpath/} subfolders are its unnamed module and,
      * when there are {@code modulepath/} subfolders, they are resolved and mapped to that same loader through
      * a child {@link ModuleLayer} - so one loader hosts the named modules and the unnamed module together,
@@ -306,9 +319,13 @@ public final class Launcher {
     }
 
     static Path location() throws URISyntaxException {
-        CodeSource source = Launcher.class.getProtectionDomain().getCodeSource();
+        return location(Launcher.class);
+    }
+
+    private static Path location(Class<?> type) throws URISyntaxException {
+        CodeSource source = type.getProtectionDomain().getCodeSource();
         if (source == null || source.getLocation() == null) {
-            throw new IllegalStateException("Cannot determine the location of the executable jar");
+            throw new IllegalStateException("Cannot determine the jar of " + type.getName());
         }
         return Path.of(source.getLocation().toURI());
     }

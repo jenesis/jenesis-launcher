@@ -135,6 +135,16 @@ the bundle's isolated loader, off the host's class path. The `=args` from the co
 agent that declares no `=<arguments>` of its own. (A bundle that *does* declare a `mainClass` is an
 application, and its agents run before its own `main` as above.)
 
+**Multiple agent bundles in one JVM.** The JVM loads a `Premain-Class` by binary name only *once*, so
+several bundles all naming `build.jenesis.launcher.LauncherAgent` would collide - the first jar wins and
+the rest are silently ignored. For bundles that must coexist, each ships its own **uniquely named**
+`Premain-Class`: a tiny generated class whose `premain`/`agentmain` just call
+`Launcher.runAgents(ThatClass.class, attach, args, instrumentation)`. Because it is resolved from its own
+code source, each bundle loads its own `application.properties` and dependencies into its own isolated
+loader, so any number can be attached at once. The Jenesis bundler emits this trampoline (a handful of
+Class-File API instructions); `LauncherAgent` is the shared default for the single-agent and application
+cases.
+
 ### Relaxing module access
 
 A bundled module sometimes needs reflective access a framework expects but its `module-info` does not

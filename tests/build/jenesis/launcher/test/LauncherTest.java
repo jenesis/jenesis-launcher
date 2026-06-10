@@ -462,6 +462,32 @@ class LauncherTest {
     }
 
     @Test
+    void runAgentsResolvesBundleFromClassCodeSource() throws Exception {
+        // runAgents(Class, ...) resolves the bundle from the class's own jar - the mechanism a generated,
+        // uniquely named Premain-Class uses so several agent bundles, each with its own properties, coexist.
+        String key = "jenesis.test.trampoline";
+        Properties properties = new Properties();
+        properties.setProperty("agentClass", "demo.agent.Probe");
+        ByteArrayOutputStream props = new ByteArrayOutputStream();
+        properties.store(props, null);
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("application.properties", props.toByteArray());
+        entries.put("classpath/probe.jar/demo/agent/Probe.class", TestJars.argumentPremain("demo.agent.Probe", key));
+        entries.put("marker/Marker.class", TestJars.setPropertyMain("marker.Marker"));
+        Path bundle = directory.resolve("trampoline-bundle.jar");
+        Files.write(bundle, TestJars.jar(entries));
+
+        Class<?> marker;
+        try (URLClassLoader loader = new URLClassLoader(new URL[] {bundle.toUri().toURL()}, null)) {
+            marker = loader.loadClass("marker.Marker");
+        }
+        System.clearProperty(key);
+        Launcher.runAgents(marker, false, "from-trampoline", null);
+
+        assertThat(System.getProperty(key)).isEqualTo("from-trampoline");
+    }
+
+    @Test
     void rejectsBundleWithoutMainClass() throws Exception {
         Path bundle = directory.resolve("empty-app.jar");
         TestJars.writeBundle(bundle, Map.of(), Map.of(), Map.of());
