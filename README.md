@@ -64,6 +64,11 @@ to:
 4. when `agentClass` is present, add `Launcher-Agent-Class: build.jenesis.launcher.LauncherAgent` to the
    manifest (see [Bundled Java agents](#bundled-java-agents)).
 
+Because the class path is *ordered* - the first jar carrying a class or resource wins - the bundler records
+the original order in the `classpath` property of `application.properties`: a comma-separated list of
+class-path dependency names (`classpath=dep1.jar,dep2.jar,...`). The launcher orders the class path by it;
+any dependency the property does not name follows in dependency-name order.
+
 ## How a launch proceeds
 
 `build.jenesis.launcher.Launcher#main` (or `Launcher#run(Path, String[])` when embedding):
@@ -287,7 +292,12 @@ The following are worth knowing before bundling an application.
   requested library to a temp file on demand (`findLibrary`), from a class-path jar or a bundled module
   (class path takes precedence). The temp file is removed on a normal exit (`deleteOnExit`) but leaks on
   an abrupt kill; if the same library name is bundled in more than one module, the first module by jar
-  name wins.
+  name wins. Each library lands in its own temp file, so one that loads a *sibling* by co-location (rather
+  than through `java.library.path`) will not find it - keep multi-file native bundles self-contained.
+
+* **Directory entries are not resources.** Only file entries are indexed, so `getResource("com/foo/")` for
+  a package or directory returns `null`, where a real exploded-directory class loader would hand back a
+  directory URL. Class loading and file-resource lookups are unaffected.
 
 * **The boot layer is immutable.** Modular dependencies necessarily form a new layer rather than joining
   the system loader. This is by design and is the faithful way to keep them modular; it is also why the
@@ -316,9 +326,11 @@ The tests synthesise class files and exploded-bundle fixtures with the JDK Class
 confined to the bundle root, a bundle path with spaces, module resources on the flat resource API
 honoring JPMS encapsulation (automatic-module and `META-INF/` resources served, a non-open package's
 resource hidden), a module reading the class path, split-package shadowing, native-library extraction,
-multi-release class selection,
+multi-release class and resource selection, a sealing violation across class-path jars,
 package metadata and sealing from the manifest, signer identity reconstructed from a `signature.<dep>` property,
-a module class's `CodeSource` location, `addExports`/`addOpens`/`addReads` grants, bundled
+a module class's `CodeSource` location, declared class-path order and a rejected duplicate module name,
+`getResources` across a module and the class path, an agent's `agentmain` on attach, a strict module's
+non-exported main, `addExports`/`addOpens`/`addReads` grants, bundled
 agents whose `premain` runs - in declaration order, with arguments - before the main class, and an agent
 bundle with no main started through `runAgents`).
 

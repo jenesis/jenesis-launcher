@@ -24,7 +24,12 @@ final class InMemoryModuleFinder implements ModuleFinder {
     InMemoryModuleFinder(List<Archive.Jar> jars) {
         for (Archive.Jar jar : jars) {
             ModuleReference reference = reference(jar);
-            references.putIfAbsent(reference.descriptor().name(), reference);
+            String name = reference.descriptor().name();
+            // A real module path rejects two modules of the same name; fail rather than silently dropping one
+            // (which would shadow a dependency and load the wrong code).
+            if (references.putIfAbsent(name, reference) != null) {
+                throw new IllegalStateException("Two bundled modules resolve to the same name: " + name);
+            }
         }
     }
 

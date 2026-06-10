@@ -141,10 +141,33 @@ final class Archive implements Closeable {
         Archive archive = new Archive();
         archive.source = source;
         archive.index(source);
-        // Deterministic order: class-path "first wins" and module discovery both depend on it.
-        archive.classpath.sort(Comparator.comparing(Jar::name));
+        // Class-path "first wins", so order matters: honour the declared order from the optional `classpath`
+        // property (comma-separated dependency names), falling back to the dependency name for anything it
+        // does not list. The module path is a set, so its name order is only a deterministic tie-break.
+        order(archive.classpath, archive.application.getProperty("classpath"));
         archive.modulepath.sort(Comparator.comparing(Jar::name));
         return archive;
+    }
+
+    /**
+     * Orders {@code jars} by the declared comma-separated dependency names in {@code declared} (the original
+     * class-path order), with any jar it does not name following in dependency-name order. With no
+     * declaration the order is purely the dependency name - deterministic, but not the original class path.
+     */
+    private static void order(List<Jar> jars, String declared) {
+        if (declared == null || declared.isBlank()) {
+            jars.sort(Comparator.comparing(Jar::name));
+            return;
+        }
+        Map<String, Integer> position = new HashMap<>();
+        for (String name : declared.split(",")) {
+            String trimmed = name.strip();
+            if (!trimmed.isEmpty()) {
+                position.putIfAbsent(trimmed, position.size());
+            }
+        }
+        jars.sort(Comparator.<Jar>comparingInt(jar -> position.getOrDefault(jar.name(), Integer.MAX_VALUE))
+                .thenComparing(Jar::name));
     }
 
     Properties application() {

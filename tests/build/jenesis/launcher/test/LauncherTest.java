@@ -446,6 +446,146 @@ class LauncherTest {
     }
 
     @Test
+    void honorsDeclaredClassPathOrder() throws Exception {
+        // Two jars both define demo.dup.Main; the `classpath` property's order decides which wins (first),
+        // not the alphabetical folder name - so declaring z.jar before a.jar yields z.jar's class.
+        byte[] z = TestJars.classJar("demo.dup.Main", TestJars.constantPropertyMain("demo.dup.Main", "z-jar"));
+        byte[] a = TestJars.classJar("demo.dup.Main", TestJars.constantPropertyMain("demo.dup.Main", "a-jar"));
+        Path bundle = directory.resolve("order-app.jar");
+        Map<String, byte[]> classpath = new LinkedHashMap<>();
+        classpath.put("z.jar", z);
+        classpath.put("a.jar", a);
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.dup.Main", "classpath", "z.jar,a.jar"),
+                classpath,
+                Map.of());
+
+        String key = "jenesis.test.classpath.order";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("z-jar");
+    }
+
+    @Test
+    void failsOnDuplicateModuleName() throws Exception {
+        // Two bundled jars resolving to the same module name is rejected, as a real module path rejects it -
+        // rather than silently dropping one and loading the wrong code.
+        byte[] one = TestJars.automaticModuleJar("demo.dup", "demo.a.Main", TestJars.setPropertyMain("demo.a.Main"));
+        byte[] two = TestJars.automaticModuleJar("demo.dup", "demo.b.Other", TestJars.setPropertyMain("demo.b.Other"));
+        Path bundle = directory.resolve("dup-module-app.jar");
+        Map<String, byte[]> modulepath = new LinkedHashMap<>();
+        modulepath.put("a.jar", one);
+        modulepath.put("b.jar", two);
+        TestJars.writeBundle(bundle, Map.of("mainModule", "demo.dup", "mainClass", "demo.a.Main"), Map.of(), modulepath);
+
+        assertThatThrownBy(() -> launch(bundle, "jenesis.test.dup"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("demo.dup");
+    }
+
+    @Test
+    void findsResourceInBothModuleAndClassPathViaGetResources() throws Exception {
+        // getResources concatenates module matches and class-path matches: a non-package resource present in
+        // both an (automatic) module and a class-path jar is returned twice, as a real launch would.
+        Path bundle = directory.resolve("get-resources-app.jar");
+        Map<String, byte[]> module = new LinkedHashMap<>();
+        module.put("META-INF/MANIFEST.MF", manifest(Map.of("Automatic-Module-Name", "demo.auto")));
+        module.put("demo/auto/Thing.class", TestJars.setPropertyMain("demo.auto.Thing"));
+        module.put("META-INF/jenesis-shared.txt", "m".getBytes(StandardCharsets.UTF_8));
+        Map<String, byte[]> cp = new LinkedHashMap<>();
+        cp.put("demo/cp/Main.class", TestJars.countResourcesMain("demo.cp.Main", "META-INF/jenesis-shared.txt"));
+        cp.put("META-INF/jenesis-shared.txt", "c".getBytes(StandardCharsets.UTF_8));
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.cp.Main"),
+                Map.of("app.jar", TestJars.jar(cp)),
+                Map.of("auto.jar", TestJars.jar(module)));
+
+        String key = "jenesis.test.get.resources";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("2");
+    }
+
+    @Test
+    void runsAgentBundleAgentmainOnAttach() throws Exception {
+        // Dynamic attach (attach=true) runs the bundled agent's agentmain, which the -javaagent (premain)
+        // path does not - exercising the agentmain method selection.
+        Path bundle = directory.resolve("attach-bundle.jar");
+        String key = "jenesis.test.agentmain";
+        TestJars.writeBundle(bundle,
+                Map.of("agentClass", "demo.agent.Probe"),
+                Map.of("probe.jar", TestJars.classJar("demo.agent.Probe", TestJars.argumentAgentmain("demo.agent.Probe", key))),
+                Map.of());
+
+        System.clearProperty(key);
+        Launcher.runAgents(bundle, true, "from-attach", null);
+
+        assertThat(System.getProperty(key)).isEqualTo("from-attach");
+    }
+
+    @Test
+    void prefersMultiReleaseResourceForTheRuntimeVersion() throws Exception {
+        // Multi-release selection applies to resources too: getResource of a base name serves the highest
+        // applicable META-INF/versions/<n>/ entry.
+        int version = Runtime.version().feature();
+        Path bundle = directory.resolve("mr-resource-app.jar");
+        Map<String, byte[]> jar = new LinkedHashMap<>();
+        jar.put("META-INF/MANIFEST.MF", multiReleaseManifest());
+        jar.put("demo/mr/Main.class", TestJars.readResourceMain("demo.mr.Main", "data.txt"));
+        jar.put("data.txt", "base".getBytes(StandardCharsets.UTF_8));
+        jar.put("META-INF/versions/" + version + "/data.txt", "versioned".getBytes(StandardCharsets.UTF_8));
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.mr.Main"),
+                Map.of("mr.jar", TestJars.jar(jar)),
+                Map.of());
+
+        String key = "jenesis.test.mr.resource";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("versioned");
+    }
+
+    @Test
+    void enforcesSealingViolationAcrossClassPathJars() throws Exception {
+        // demo.sealed is sealed by the first jar; a second jar contributing a class to the same package must
+        // fail to define - its CodeSource differs from the seal base, as URLClassLoader enforces.
+        Path bundle = directory.resolve("sealing-violation-app.jar");
+        Map<String, byte[]> sealed = new LinkedHashMap<>();
+        sealed.put("META-INF/MANIFEST.MF", manifest(Map.of("Sealed", "true")));
+        sealed.put("demo/sealed/Main.class", TestJars.loadClassMain("demo.sealed.Main", "demo.sealed.Other"));
+        Map<String, byte[]> classpath = new LinkedHashMap<>();
+        classpath.put("sealed.jar", TestJars.jar(sealed));
+        classpath.put("other.jar", TestJars.classJar("demo.sealed.Other", TestJars.setPropertyMain("demo.sealed.Other")));
+        TestJars.writeBundle(bundle, Map.of("mainClass", "demo.sealed.Main"), classpath, Map.of());
+
+        assertThatThrownBy(() -> launch(bundle, "jenesis.test.sealing", "x"))
+                .isInstanceOf(SecurityException.class);
+    }
+
+    @Test
+    void invokesNonExportedMainOfStrictModule() throws Exception {
+        // A strict module that exports nothing: the launcher grants itself access to the main package (as
+        // `java -m module/Class` does), so a non-exported main still runs.
+        Path bundle = directory.resolve("strict-main-app.jar");
+        Map<String, byte[]> module = new LinkedHashMap<>();
+        module.put("module-info.class", TestJars.moduleInfo("demo.strict"));
+        module.put("demo/strict/Main.class", TestJars.setPropertyMain("demo.strict.Main"));
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.strict", "mainClass", "demo.strict.Main"),
+                Map.of(),
+                Map.of("strict.jar", TestJars.jar(module)));
+
+        String key = "jenesis.test.strict.main";
+        System.clearProperty(key);
+        launch(bundle, key, "ok");
+
+        assertThat(System.getProperty(key)).isEqualTo("ok");
+    }
+
+    @Test
     void resolvesResourcesWhenBundlePathHasSpaces() throws Exception {
         // A space in both the bundle path and the resource name forces correct jar: URL percent-encoding.
         Path folder = Files.createDirectories(directory.resolve("with space"));

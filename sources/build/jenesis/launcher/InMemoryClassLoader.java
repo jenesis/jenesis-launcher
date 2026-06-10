@@ -14,9 +14,10 @@ import java.util.jar.Attributes;
  *
  * <p>It holds no class or resource bytes - only the {@link Archive.Jar} handles and a package-to-module
  * index. Class and resource bytes are read from the still-open outer jar (or directory) on demand and
- * discarded after {@link #defineClass}. On the class path the first jar in iteration order wins, matching
- * class-path precedence; a package owned by a bundled module is served only from that module, so a
- * same-named package on the class path is shadowed - the JDK's own rule for {@code java -p ... -cp ...}.</p>
+ * discarded after {@link #defineClass}. On the class path the first jar in the declared class-path order
+ * wins (the {@code classpath} property, otherwise dependency name); a package owned by a bundled module is
+ * served only from that module, so a same-named package on the class path is shadowed - the JDK's own rule
+ * for {@code java -p ... -cp ...}.</p>
  *
  * <p>Resources are real entries of a real file, so {@link #findResource(String)} and
  * {@link #findResource(String, String)} hand back standard {@code jar:}/{@code file:} URLs that the JDK's
@@ -96,21 +97,34 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
     }
 
     private void definePackage(Archive.Jar jar, String packageName) {
-        if (getDefinedPackage(packageName) != null) {
+        Manifest manifest = manifest(jar);
+        Attributes main = manifest == null ? null : manifest.getMainAttributes();
+        // A per-package section (Name: pkg/) overrides the main attributes, as URLClassLoader reads them.
+        Attributes pkg = manifest == null ? null : manifest.getAttributes(packageName.replace('.', '/') + "/");
+        boolean sealed = manifest != null && Boolean.parseBoolean(attribute(Attributes.Name.SEALED, pkg, main));
+        Package defined = getDefinedPackage(packageName);
+        if (defined != null) {
+            // Verify sealing is consistent, exactly as the JDK's app loader (BuiltinClassLoader) does: a
+            // sealed package must be sealed to this dependency's URL, and a package already defined without
+            // sealing cannot now be sealed.
+            if (defined.isSealed()) {
+                if (!defined.isSealed(jar.url())) {
+                    throw new SecurityException("sealing violation: package " + packageName + " is sealed");
+                }
+            } else if (sealed) {
+                throw new SecurityException("sealing violation: can't seal package " + packageName
+                        + ", already defined unsealed");
+            }
             return;
         }
-        Manifest manifest = manifest(jar);
         try {
             if (manifest == null) {
                 definePackage(packageName, null, null, null, null, null, null, null);
                 return;
             }
-            // Reproduce URLClassLoader's manifest reading: a per-package section (Name: pkg/) overrides the
-            // main attributes; a sealed package is sealed to the dependency's URL, which matches the
-            // CodeSource of the classes defined into it, so sealing is honored rather than violated.
-            Attributes main = manifest.getMainAttributes();
-            Attributes pkg = manifest.getAttributes(packageName.replace('.', '/') + "/");
-            URL sealBase = Boolean.parseBoolean(attribute(Attributes.Name.SEALED, pkg, main)) ? jar.url() : null;
+            // A sealed package is sealed to the dependency's URL, which matches the CodeSource of the classes
+            // defined into it, so a matching dependency loads and a foreign one is rejected above.
+            URL sealBase = sealed ? jar.url() : null;
             definePackage(packageName,
                     attribute(Attributes.Name.SPECIFICATION_TITLE, pkg, main),
                     attribute(Attributes.Name.SPECIFICATION_VERSION, pkg, main),

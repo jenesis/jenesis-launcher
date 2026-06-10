@@ -200,6 +200,44 @@ final class TestJars {
                 .return_());
     }
 
+    /** An agent class whose {@code agentmain(String args)} stores {@code System.setProperty(key, args)}. */
+    static byte[] argumentAgentmain(String binaryName, String key) {
+        return method(binaryName, "agentmain", MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_String),
+                code -> code
+                        .loadConstant(key)
+                        .aload(0)
+                        .invokestatic(CD_System, "setProperty",
+                                MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String, ConstantDescs.CD_String))
+                        .pop()
+                        .return_());
+    }
+
+    /**
+     * A class whose {@code main} stores the number of {@code resource} URLs the thread context class loader
+     * enumerates into {@code System.setProperty(args[0], count)} - exercising findResources (the plural API).
+     */
+    static byte[] countResourcesMain(String binaryName, String resource) {
+        ClassDesc enumeration = ClassDesc.of("java.util.Enumeration");
+        ClassDesc collections = ClassDesc.of("java.util.Collections");
+        ClassDesc arrayList = ClassDesc.of("java.util.ArrayList");
+        return main(binaryName, code -> code
+                .invokestatic(CD_Thread, "currentThread", MethodTypeDesc.of(CD_Thread))
+                .invokevirtual(CD_Thread, "getContextClassLoader", MethodTypeDesc.of(CD_ClassLoader))
+                .loadConstant(resource)
+                .invokevirtual(CD_ClassLoader, "getResources", MethodTypeDesc.of(enumeration, ConstantDescs.CD_String))
+                .invokestatic(collections, "list", MethodTypeDesc.of(arrayList, enumeration))
+                .invokevirtual(arrayList, "size", MethodTypeDesc.of(ConstantDescs.CD_int))
+                .invokestatic(ConstantDescs.CD_String, "valueOf",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_int))
+                .astore(1)
+                .aload(0).iconst_0().aaload()
+                .aload(1)
+                .invokestatic(CD_System, "setProperty",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String, ConstantDescs.CD_String))
+                .pop()
+                .return_());
+    }
+
     /**
      * A class whose {@code main} reads {@code resource} via {@code <ThisClass>.class.getResourceAsStream}
      * and stores its contents into {@code System.setProperty(args[0], contents)}. Unlike
