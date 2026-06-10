@@ -35,6 +35,7 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
     private final List<Archive.Jar> classpath;
     private final Map<String, String> packageToModule = new HashMap<>();
     private final Map<String, ModuleDescriptor> descriptors = new HashMap<>();
+    private final Map<String, ProtectionDomain> moduleDomains = new HashMap<>();
     private final Map<String, ModuleReader> readers = new LinkedHashMap<>();
     private final Map<String, ProtectionDomain> domains = new ConcurrentHashMap<>();
     private final Map<String, Optional<Manifest>> manifests = new ConcurrentHashMap<>();
@@ -51,6 +52,9 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
                 String module = descriptor.name();
                 readers.put(module, reference.open());
                 descriptors.put(module, descriptor);
+                // A class defined from a module gets a CodeSource at the module's location, as a real
+                // module-path class does (with no signers, matching the JDK's module-path loader).
+                reference.location().ifPresent(uri -> moduleDomains.put(module, moduleDomain(uri)));
                 for (String packageName : descriptor.packages()) {
                     packageToModule.putIfAbsent(packageName, module);
                 }
@@ -70,8 +74,9 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
                 throw new ClassNotFoundException(name);
             }
             // The package is recorded against this loader (defineModules ran first), so the VM assigns the
-            // class to its module automatically; do not definePackage for a module package.
-            return defineClass(name, data, 0, data.length);
+            // class to its module automatically; do not definePackage for a module package. The module's
+            // ProtectionDomain (null if it has no location) gives the class a CodeSource at the module.
+            return defineClass(name, data, 0, data.length, moduleDomains.get(module));
         }
         for (Archive.Jar jar : classpath) {
             byte[] data = jar.open(resource);
@@ -126,6 +131,15 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
                 new ProtectionDomain(new CodeSource(jar.url(), signers(name)), null));
     }
 
+    /** A protection domain whose code source is a module's exploded-folder location (no signers, as on the module path). */
+    private static ProtectionDomain moduleDomain(URI location) {
+        try {
+            return new ProtectionDomain(new CodeSource(location.toURL(), (CodeSigner[]) null), null);
+        } catch (MalformedURLException e) {
+            throw new IllegalStateException("Cannot build a code source for module location " + location, e);
+        }
+    }
+
     /**
      * The signer certificates to attach to a class-path dependency's {@link CodeSource}, reconstructed from
      * an optional {@code signatures.properties} entry (Base64 of the signer's PKCS#7 certificate chain),
@@ -173,7 +187,7 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
         }
         synchronized (getClassLoadingLock(name)) {
             Class<?> loaded = findLoadedClass(name);
-            return loaded != null ? loaded : defineClass(name, data, 0, data.length);
+            return loaded != null ? loaded : defineClass(name, data, 0, data.length, moduleDomains.get(moduleName));
         }
     }
 

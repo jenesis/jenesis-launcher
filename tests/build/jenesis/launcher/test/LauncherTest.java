@@ -427,6 +427,25 @@ class LauncherTest {
     }
 
     @Test
+    void exposesModuleClassCodeSourceLocation() throws Exception {
+        // A module class carries a CodeSource at the module's exploded folder URL, as a real module-path
+        // class does - so getProtectionDomain().getCodeSource().getLocation() resolves rather than being null.
+        Path bundle = directory.resolve("module-cs-app.jar");
+        byte[] module = TestJars.automaticModuleJar("demo.module", "demo.mod.Main",
+                TestJars.codeSourceLocationMain("demo.mod.Main"));
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.module", "mainClass", "demo.mod.Main"),
+                Map.of(),
+                Map.of("mod.jar", module));
+
+        String key = "jenesis.test.module.codesource";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).contains("modulepath/mod.jar");
+    }
+
+    @Test
     void resolvesResourcesWhenBundlePathHasSpaces() throws Exception {
         // A space in both the bundle path and the resource name forces correct jar: URL percent-encoding.
         Path folder = Files.createDirectories(directory.resolve("with space"));

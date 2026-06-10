@@ -33,6 +33,30 @@ final class TestJars {
     }
 
     /**
+     * A class whose {@code main} stores its own code source's location into
+     * {@code System.setProperty(args[0], getCodeSource().getLocation().toExternalForm())} - exercising the
+     * {@code CodeSource} a module class carries. Throws if the class has no code source.
+     */
+    static byte[] codeSourceLocationMain(String binaryName) {
+        ClassDesc protectionDomain = ClassDesc.of("java.security.ProtectionDomain");
+        ClassDesc codeSource = ClassDesc.of("java.security.CodeSource");
+        ClassDesc url = ClassDesc.of("java.net.URL");
+        return main(binaryName, code -> code
+                .loadConstant(ClassDesc.of(binaryName))
+                .invokevirtual(ConstantDescs.CD_Class, "getProtectionDomain", MethodTypeDesc.of(protectionDomain))
+                .invokevirtual(protectionDomain, "getCodeSource", MethodTypeDesc.of(codeSource))
+                .invokevirtual(codeSource, "getLocation", MethodTypeDesc.of(url))
+                .invokevirtual(url, "toExternalForm", MethodTypeDesc.of(ConstantDescs.CD_String))
+                .astore(1)
+                .aload(0).iconst_0().aaload()
+                .aload(1)
+                .invokestatic(CD_System, "setProperty",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String, ConstantDescs.CD_String))
+                .pop()
+                .return_());
+    }
+
+    /**
      * A class whose {@code main} stores its own code source's leaf signer distinguished name into
      * {@code System.setProperty(args[0], cert.getSubjectX500Principal().getName())} - exercising the signer
      * identity reconstructed from {@code signatures.properties}. Throws if the code source carries no signers.

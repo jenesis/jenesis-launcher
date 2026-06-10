@@ -261,8 +261,9 @@ The following are worth knowing before bundling an application.
   signatures are not cryptographically verified** - a dependency's signature files are exploded as ordinary
   entries; the optional [`signatures.properties`](#emulating-a-signed-jar) reconstructs a class-path
   dependency's signer *identity* so `CodeSource#getCodeSigners`/`getCertificates` report it, but it attests
-  rather than re-verifies. Module classes carry no `CodeSource` - the module system, not a manifest, governs
-  their packages.
+  rather than re-verifies. A module class likewise carries a `CodeSource` - its module's exploded-folder URL,
+  with no signers (as on a real module path) - though its packages are governed by the module system, not a
+  manifest.
 
 * **The module graph is fixed to the bundle plus the default boot modules.** Every bundled module is
   bound as a root against the boot layer; you can add `reads` / `opens` / `exports` edges for bundled
@@ -315,7 +316,7 @@ honoring JPMS encapsulation (automatic-module and `META-INF/` resources served, 
 resource hidden), a module reading the class path, split-package shadowing, native-library extraction,
 multi-release class selection,
 package metadata and sealing from the manifest, signer identity reconstructed from `signatures.properties`,
-`addExports`/`addOpens`/`addReads` grants, bundled
+a module class's `CodeSource` location, `addExports`/`addOpens`/`addReads` grants, bundled
 agents whose `premain` runs - in declaration order, with arguments - before the main class, and an agent
 bundle with no main started through `runAgents`).
 

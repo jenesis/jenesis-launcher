@@ -48,9 +48,16 @@ final class InMemoryModuleFinder implements ModuleFinder {
         ModuleDescriptor descriptor = moduleInfo != null
                 ? ModuleDescriptor.read(ByteBuffer.wrap(moduleInfo), () -> packages)
                 : automatic(jar, packages);
-        // The location is metadata only (resources are served through the reader's jar:/file: URLs), so an
-        // absent location is fine.
-        return new ModuleReference(descriptor, null) {
+        // The module's location is its exploded folder URL, so a class the loader defines from it carries a
+        // CodeSource pointing there - as a real module-path class does. Resources are still served through
+        // the reader's own jar:/file: URLs, not this location.
+        URI location;
+        try {
+            location = jar.url().toURI();
+        } catch (URISyntaxException e) {
+            throw new IllegalStateException("Cannot derive a module location for " + jar.name(), e);
+        }
+        return new ModuleReference(descriptor, location) {
             @Override
             public ModuleReader open() {
                 return new ArchiveModuleReader(jar);
