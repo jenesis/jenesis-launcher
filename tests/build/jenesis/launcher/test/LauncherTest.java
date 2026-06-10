@@ -428,6 +428,40 @@ class LauncherTest {
     }
 
     @Test
+    void runsAgentBundlePremain() throws Exception {
+        // A bundle with no mainClass, used as a Java agent: runAgents invokes the bundled agent's premain,
+        // passing the launcher's arguments (the -javaagent:foo.jar=... value) when the agent declares none.
+        Path bundle = directory.resolve("agent-bundle.jar");
+        String key = "jenesis.test.agentbundle";
+        TestJars.writeBundle(bundle,
+                Map.of("agentClass", "demo.agent.Probe"),
+                Map.of("probe.jar", TestJars.classJar("demo.agent.Probe", TestJars.argumentPremain("demo.agent.Probe", key))),
+                Map.of());
+
+        System.clearProperty(key);
+        Launcher.runAgents(bundle, false, "from-javaagent", null);
+
+        assertThat(System.getProperty(key)).isEqualTo("from-javaagent");
+    }
+
+    @Test
+    void runAgentsDefersToMainForApplicationBundle() throws Exception {
+        // A bundle WITH a mainClass is an application: runAgents leaves its agents to Launcher.run.
+        Path bundle = directory.resolve("app-with-agent.jar");
+        String key = "jenesis.test.deferred";
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.app.Main", "agentClass", "demo.agent.Probe"),
+                Map.of("app.jar", TestJars.classJar("demo.app.Main", TestJars.setPropertyMain("demo.app.Main")),
+                        "probe.jar", TestJars.classJar("demo.agent.Probe", TestJars.argumentPremain("demo.agent.Probe", key))),
+                Map.of());
+
+        System.clearProperty(key);
+        Launcher.runAgents(bundle, false, "ignored", null);
+
+        assertThat(System.getProperty(key)).isNull();
+    }
+
+    @Test
     void rejectsBundleWithoutMainClass() throws Exception {
         Path bundle = directory.resolve("empty-app.jar");
         TestJars.writeBundle(bundle, Map.of(), Map.of(), Map.of());

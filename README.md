@@ -120,6 +120,21 @@ and calls its `agentmain` with the `Instrumentation`. Capabilities are read from
 any of these attributes no `Instrumentation` is captured, and only agents that declare `premain(String)`
 can run.
 
+**Agent bundles (no `mainClass`).** A bundle that declares no `mainClass` is itself a Java agent. Give it
+`Premain-Class: build.jenesis.launcher.LauncherAgent` (for `-javaagent:foo.jar`) and/or
+`Agent-Class: build.jenesis.launcher.LauncherAgent` (for dynamic attach), and use it on a *host*
+application:
+
+```
+java -javaagent:foo.jar=args -jar your-app.jar
+```
+
+The launcher builds the bundle's own loader and runs the bundled `agentClass` agents' `premain` (or
+`agentmain`, on attach) against the host's `Instrumentation` - so the agent and its dependencies stay in
+the bundle's isolated loader, off the host's class path. The `=args` from the command line reach each
+agent that declares no `=<arguments>` of its own. (A bundle that *does* declare a `mainClass` is an
+application, and its agents run before its own `main` as above.)
+
 ### Relaxing module access
 
 A bundled module sometimes needs reflective access a framework expects but its `module-info` does not
@@ -217,8 +232,9 @@ The tests synthesise class files and exploded-bundle fixtures with the JDK Class
 `Launcher#run` end to end (class-path and modular apps, automatic-module naming, resources via
 `jar:`/`file:` URLs from both a jar and an exploded directory, a bundle path with spaces, a module
 reading the class path, split-package shadowing, native-library extraction, multi-release class selection,
-package metadata and sealing from the manifest, `addExports`/`addOpens`/`addReads` grants, and bundled
-agents whose `premain` runs - in declaration order, with arguments - before the main class).
+package metadata and sealing from the manifest, `addExports`/`addOpens`/`addReads` grants, bundled
+agents whose `premain` runs - in declaration order, with arguments - before the main class, and an agent
+bundle with no main started through `runAgents`).
 
 ## Using it
 
@@ -227,6 +243,13 @@ Jenesis bundling step, which shades it into the executable jars it produces. To 
 
 ```
 java -jar foo.jar [args...]
+```
+
+A bundle with no `mainClass` is instead a self-contained Java agent (see
+[Agent bundles](#bundled-java-agents)):
+
+```
+java -javaagent:foo.jar=args -jar your-app.jar
 ```
 
 ## License

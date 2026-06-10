@@ -5,35 +5,27 @@ import module java.base;
 import java.lang.instrument.Instrumentation;
 
 /**
- * Entry point for an executable jar produced by Jenesis.
+ * Entry point for an executable jar produced by Jenesis, and the bootstrap for using such a bundle as a
+ * Java agent.
  *
- * <p>The jar bundles its dependencies as <em>nested</em> jars under {@code classpath/} and
- * {@code modulepath/} (rather than exploding their classes into one flat jar), so module identity,
- * {@code module-info}, signatures and {@code META-INF/services} survive intact. This class is shaded
- * into the jar root and named as the manifest {@code Main-Class}; {@code java -jar foo.jar} therefore
- * lands here. It then reproduces, in process and entirely from memory, what
- * {@code java -p modulepath -cp classpath -m mainModule/mainClass} would have done:</p>
+ * <p>Each dependency is exploded into its own subfolder of the jar ({@code classpath/<name>/},
+ * {@code modulepath/<name>/}), so the launcher reads classes and resources on demand from the still-open
+ * outer jar (see {@link Archive}). {@link #main} - the manifest {@code Main-Class}, where
+ * {@code java -jar foo.jar} lands - reproduces
+ * {@code java -p modulepath -cp classpath -m mainModule/mainClass}: build a single
+ * {@link InMemoryClassLoader} whose unnamed module is the {@code classpath/} subfolders and, if there are
+ * {@code modulepath/} subfolders, define a child {@link ModuleLayer} mapping every module to that same
+ * loader; invoke {@code premain} on each agent named by {@code agentClass} before the main class is loaded;
+ * then invoke {@code main}.</p>
  *
- * <ol>
- *   <li>read {@code application.properties} ({@code mainClass}, optional {@code mainModule}, optional
- *       {@code agentClass}) and the nested jars (see {@link Archive});</li>
- *   <li>build a single {@link InMemoryClassLoader} over the {@code classpath/} jars (its unnamed module);</li>
- *   <li>if there are {@code modulepath/} jars, resolve them with an {@link InMemoryModuleFinder} and
- *       define a child {@link ModuleLayer} whose modules are all mapped to that same loader - so one
- *       loader hosts the named modules and the unnamed module together, just as
- *       {@code java -p modulepath -cp classpath} does. Automatic modules read the class path while named
- *       modules cannot, and a package owned by a module shadows the same package on the class path - the
- *       JDK's own rules. This happens regardless of whether a {@code mainModule} is declared, so a
- *       non-modular application can still reach module-path code;</li>
- *   <li>invoke {@code premain} on each agent named by {@code agentClass}, before the main class is
- *       loaded, so a transformer they register still sees it being defined - exactly as
- *       {@code -javaagent} would (see {@link LauncherAgent} for how the {@link Instrumentation} is
- *       obtained);</li>
- *   <li>invoke {@code main} on the resolved class.</li>
- * </ol>
+ * <p>A bundle with no {@code mainClass} is instead a self-contained Java agent: referenced as
+ * {@code -javaagent:foo.jar} or attached dynamically, {@link LauncherAgent} enters {@link #runAgents} to
+ * build the same isolated loader and run the bundled agents' {@code premain}/{@code agentmain} against the
+ * host's {@link Instrumentation} - the agent's dependencies stay in the bundle's loader, off the host's
+ * class path.</p>
  *
- * <p>The boot module layer is immutable, so modular dependencies necessarily form a new layer rather
- * than joining the system loader; this is the faithful, supported way to keep them modular.</p>
+ * <p>The boot module layer is immutable, so modular dependencies necessarily form a new layer rather than
+ * joining the system loader; this is the faithful, supported way to keep them modular.</p>
  */
 public final class Launcher {
 
@@ -52,38 +44,77 @@ public final class Launcher {
     public static void run(Path location, String[] args) throws Exception {
         Archive archive = Archive.load(location);
         String mainClass = archive.application().getProperty("mainClass");
-        String mainModule = archive.application().getProperty("mainModule");
         if (mainClass == null || mainClass.isBlank()) {
             throw new IllegalStateException("No 'mainClass' declared in " + Archive.APPLICATION
                     + " of " + location);
         }
+        InMemoryClassLoader loader = prepare(archive);
+        Thread.currentThread().setContextClassLoader(loader);
+        // Run agents before the main class is loaded, mirroring `-javaagent`: a ClassFileTransformer a
+        // premain registers must be in place for the JVM to apply it to the main class being defined.
+        invokeAgents("premain", LauncherAgent.instrumentation(), null, archive.application(), loader);
+        invokeMain(loader.loadClass(mainClass), args);
+    }
 
+    /**
+     * Bootstraps a bundle used as a Java agent - one with no {@code mainClass} - building its isolated
+     * loader and invoking, on each agent named by {@code agentClass}, {@code agentmain} when {@code attach}
+     * is set (dynamic attach) or {@code premain} otherwise ({@code -javaagent}), with the host's
+     * {@code instrumentation}. A bundle that declares a {@code mainClass} is an application whose agents are
+     * run by {@link #run} before {@code main}, so this method does nothing for it. The JVM normally enters
+     * here through {@link LauncherAgent}; this is also the embedding entry point.
+     */
+    public static void runAgents(Path location, boolean attach, String arguments, Instrumentation instrumentation)
+            throws Exception {
+        Archive archive = Archive.load(location);
+        String mainClass = archive.application().getProperty("mainClass");
+        if (mainClass != null && !mainClass.isBlank()) {
+            return;
+        }
+        InMemoryClassLoader loader = prepare(archive);
+        // Set the context loader only while the agents start, then restore it: the host application keeps
+        // running on this thread afterwards and must not inherit the bundle's loader.
+        ClassLoader previous = Thread.currentThread().getContextClassLoader();
+        Thread.currentThread().setContextClassLoader(loader);
+        try {
+            invokeAgents(attach ? "agentmain" : "premain", instrumentation, arguments, archive.application(), loader);
+        } finally {
+            Thread.currentThread().setContextClassLoader(previous);
+        }
+    }
+
+    /**
+     * Builds the single loader for a bundle: the {@code classpath/} subfolders are its unnamed module and,
+     * when there are {@code modulepath/} subfolders, they are resolved and mapped to that same loader through
+     * a child {@link ModuleLayer} - so one loader hosts the named modules and the unnamed module together,
+     * just as {@code java -p modulepath -cp classpath} does (automatic modules read the class path while named
+     * ones cannot, and a module shadows a same-named class-path package). Grants this launcher access to a
+     * modular main package and applies the {@code addExports}/{@code addOpens}/{@code addReads} properties.
+     */
+    private static InMemoryClassLoader prepare(Archive archive) throws Exception {
+        String mainClass = archive.application().getProperty("mainClass");
+        String mainModule = archive.application().getProperty("mainModule");
         ClassLoader system = ClassLoader.getSystemClassLoader();
         InMemoryClassLoader loader;
         ModuleLayer.Controller controller = null;
         ModuleLayer layer = null;
         if (!archive.modulepath().isEmpty()) {
-            // One loader hosts the class-path jars (its unnamed module) and the module-path jars (defined
-            // to it as named modules), mirroring `java -p modulepath -cp classpath`, where a single
-            // application loader hosts both. The layer is built whenever there are modules, even without a
-            // main module, so a non-modular application can still reach module-path code (e.g. agents).
             InMemoryModuleFinder finder = new InMemoryModuleFinder(archive.modulepath());
             java.lang.module.Configuration configuration = ModuleLayer.boot().configuration()
                     .resolveAndBind(finder, ModuleFinder.of(), finder.moduleNames());
             // Resolve and construct the loader first: defineModules records each module's packages against
-            // the loader, after which class loading may begin. The returned Controller is the supported
-            // handle a layer creator uses to break encapsulation of the modules it just defined.
+            // the loader, after which class loading may begin.
             loader = new InMemoryClassLoader(archive.classpath(), finder, system);
             controller = ModuleLayer.defineModules(configuration, List.of(ModuleLayer.boot()), _ -> loader);
             layer = controller.layer();
         } else {
             loader = new InMemoryClassLoader(archive.classpath(), null, system);
         }
-
-        if (controller != null && mainModule != null && !mainModule.isBlank()) {
+        if (controller != null && mainModule != null && !mainModule.isBlank()
+                && mainClass != null && !mainClass.isBlank()) {
             // Reproduce `java -m <module>/<class>`, which invokes main without requiring its package to be
-            // exported: grant this launcher access to the main package through the controller, derived from
-            // the declared module and class name so it happens before the main class is defined.
+            // exported: grant this launcher access to the main package, derived from the declared module and
+            // class name so it happens before the main class is defined.
             Module application = layer.findModule(mainModule).orElseThrow(() ->
                     new IllegalStateException("Main module not found on the module path: " + mainModule));
             String packageName = packageOf(mainClass);
@@ -93,73 +124,67 @@ public final class Launcher {
                 controller.addOpens(application, packageName, launcher);
             }
         }
-
         if (controller != null) {
             grantAccess(controller, layer, loader, archive.application());
         }
-
-        Thread.currentThread().setContextClassLoader(loader);
-        // Run agents before the main class is loaded, mirroring `-javaagent`: a ClassFileTransformer a
-        // premain registers must be in place for the JVM to apply it to the main class being defined.
-        runAgents(archive.application(), loader);
-        invokeMain(loader.loadClass(mainClass), args);
+        return loader;
     }
 
     /**
-     * Bootstraps the agents named by the {@code agentClass} property, in declaration order, by invoking
-     * each agent class's {@code premain}. The value is a comma-separated list of fully qualified class
-     * names, each optionally followed by {@code =<arguments>} (mirroring {@code -javaagent:<jar>=<args>});
-     * arguments run to the end of the entry. The agents are loaded from the application's runtime loader,
-     * so they may live on the class path or, for a modular application, on the module path.
+     * Invokes {@code method} ({@code premain}/{@code agentmain}) on each agent named by the
+     * {@code agentClass} property, in declaration order. The value is a comma-separated list of fully
+     * qualified class names, each optionally followed by {@code =<arguments>} (mirroring
+     * {@code -javaagent:<jar>=<args>}); a directive's own arguments win, otherwise the agent gets
+     * {@code defaultArguments}. The agents are loaded from the bundle's loader, so they may live on the class
+     * path or the module path.
      */
-    private static void runAgents(Properties application, ClassLoader loader) throws Exception {
+    private static void invokeAgents(String method, Instrumentation instrumentation, String defaultArguments,
+                                     Properties application, ClassLoader loader) throws Exception {
         String declaration = application.getProperty("agentClass");
         if (declaration == null || declaration.isBlank()) {
             return;
         }
-        Instrumentation instrumentation = LauncherAgent.instrumentation();
         for (String entry : declaration.split(",")) {
             int equals = entry.indexOf('=');
             String className = (equals == -1 ? entry : entry.substring(0, equals)).strip();
-            // No `=` means no arguments at all (null), matching how the JVM passes agentArgs.
-            String arguments = equals == -1 ? null : entry.substring(equals + 1);
+            String arguments = equals == -1 ? defaultArguments : entry.substring(equals + 1);
             if (!className.isEmpty()) {
-                invokePremain(loader.loadClass(className), arguments, instrumentation);
+                invokeAgent(loader.loadClass(className), method, arguments, instrumentation);
             }
         }
     }
 
-    private static void invokePremain(Class<?> agent, String arguments, Instrumentation instrumentation)
+    private static void invokeAgent(Class<?> agent, String method, String arguments, Instrumentation instrumentation)
             throws Exception {
-        // Mirror the JVM's own agent start-up: prefer premain(String, Instrumentation), fall back to
-        // premain(String). The two-argument form is only usable when an Instrumentation was captured.
-        Method premain = instrumentation == null ? null : premain(agent, String.class, Instrumentation.class);
-        Object[] parameters = premain == null
+        // Mirror the JVM's own agent start-up: prefer <method>(String, Instrumentation), fall back to
+        // <method>(String). The two-argument form is only usable when an Instrumentation is available.
+        Method entry = instrumentation == null ? null : agentMethod(agent, method, String.class, Instrumentation.class);
+        Object[] parameters = entry == null
                 ? new Object[] {arguments}
                 : new Object[] {arguments, instrumentation};
-        if (premain == null) {
-            premain = premain(agent, String.class);
+        if (entry == null) {
+            entry = agentMethod(agent, method, String.class);
         }
-        if (premain == null) {
-            throw new IllegalStateException("Agent class " + agent.getName() + " declares no static"
-                    + " premain(String) or premain(String, Instrumentation) method"
+        if (entry == null) {
+            throw new IllegalStateException("Agent class " + agent.getName() + " declares no static "
+                    + method + "(String) or " + method + "(String, Instrumentation) method"
                     + (instrumentation == null
-                            ? "; without instrumentation only premain(String) can run - declare"
+                            ? "; without instrumentation only " + method + "(String) can run - declare"
                               + " 'Launcher-Agent-Class: " + LauncherAgent.class.getName()
                               + "' in the manifest to capture it"
                             : ""));
         }
-        premain.setAccessible(true);
+        entry.setAccessible(true);
         try {
-            premain.invoke(null, parameters);
+            entry.invoke(null, parameters);
         } catch (InvocationTargetException thrownByAgent) {
             rethrowCause(thrownByAgent);
         }
     }
 
-    private static Method premain(Class<?> agent, Class<?>... parameterTypes) {
+    private static Method agentMethod(Class<?> agent, String name, Class<?>... parameterTypes) {
         try {
-            Method method = agent.getDeclaredMethod("premain", parameterTypes);
+            Method method = agent.getDeclaredMethod(name, parameterTypes);
             return Modifier.isStatic(method.getModifiers()) ? method : null;
         } catch (NoSuchMethodException absent) {
             return null;
@@ -280,7 +305,7 @@ public final class Launcher {
         }
     }
 
-    private static Path location() throws URISyntaxException {
+    static Path location() throws URISyntaxException {
         CodeSource source = Launcher.class.getProtectionDomain().getCodeSource();
         if (source == null || source.getLocation() == null) {
             throw new IllegalStateException("Cannot determine the location of the executable jar");
