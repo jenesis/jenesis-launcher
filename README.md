@@ -174,6 +174,11 @@ static byte[] trampoline(String binaryName) {
 }
 ```
 
+Both methods are branch-free, so the Class-File API computes no stack-map frames and never resolves a class
+hierarchy - the generator needs neither the launcher nor the agent's dependencies on its own class path,
+and the produced class verifies without them (the call to `Launcher.runAgents` resolves lazily, on first
+invocation, when the launcher is on the system class path).
+
 The rest is plain jar assembly (no Class-File API): write those bytes at `binaryName`'s path, set the
 manifest `Premain-Class` and `Agent-Class` to `binaryName`, and lay out `application.properties`
 (`agentClass=...`), the exploded `classpath/<name>/` and `modulepath/<name>/` dependencies, and the
