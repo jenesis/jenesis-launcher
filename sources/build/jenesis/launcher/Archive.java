@@ -20,15 +20,24 @@ import module java.base;
  * memory - never the decompressed bytes. {@link #load(Path)} accepts either a jar file or a directory
  * laid out the same way.</p>
  */
-final class Archive {
+final class Archive implements Closeable {
 
     static final String APPLICATION = "application.properties";
+    static final String SIGNATURES = "signatures.properties";
     static final String CLASS_PATH = "classpath/";
     static final String MODULE_PATH = "modulepath/";
 
     /** Reads bytes and openable URLs for entries of the outer jar or directory, on demand. */
-    interface Source {
-        byte[] open(String entry) throws IOException;
+    interface Source extends Closeable {
+        /** An open stream for {@code entry}, or {@code null} if it is absent; the caller closes it. */
+        InputStream stream(String entry) throws IOException;
+
+        /** All bytes of {@code entry}, or {@code null} if it is absent. */
+        default byte[] open(String entry) throws IOException {
+            try (InputStream in = stream(entry)) {
+                return in == null ? null : in.readAllBytes();
+            }
+        }
 
         URL url(String entry);
 
@@ -86,6 +95,25 @@ final class Archive {
             }
         }
 
+        /**
+         * An open stream for {@code entry} in this dependency's multi-release view, or {@code null} if it is
+         * absent; the caller closes it. Streams straight from the still-open jar/directory rather than
+         * buffering, so a resource of any size is read without materialising it in full.
+         */
+        InputStream stream(String entry) {
+            try {
+                for (int version : versions) {
+                    InputStream in = source.stream(prefix + VERSIONS + version + "/" + entry);
+                    if (in != null) {
+                        return in;
+                    }
+                }
+                return source.stream(prefix + entry);
+            } catch (IOException e) {
+                throw new UncheckedIOException("Failed to read " + prefix + entry, e);
+            }
+        }
+
         URL url(String entry) {
             for (int version : versions) {
                 URL url = source.url(prefix + VERSIONS + version + "/" + entry);
@@ -103,14 +131,17 @@ final class Archive {
     }
 
     private final Properties application = new Properties();
+    private final Properties signatures = new Properties();
     private final List<Jar> classpath = new ArrayList<>();
     private final List<Jar> modulepath = new ArrayList<>();
+    private Source source;
 
     static Archive load(Path location) throws IOException {
         Source source = Files.isDirectory(location)
                 ? new DirectorySource(location)
                 : new ZipSource(location);
         Archive archive = new Archive();
+        archive.source = source;
         archive.index(source);
         // Deterministic order: class-path "first wins" and module discovery both depend on it.
         archive.classpath.sort(Comparator.comparing(Jar::name));
@@ -122,6 +153,11 @@ final class Archive {
         return application;
     }
 
+    /** The optional signer certificate chains by dependency name (see {@code signatures.properties}). */
+    Properties signatures() {
+        return signatures;
+    }
+
     List<Jar> classpath() {
         return classpath;
     }
@@ -130,10 +166,25 @@ final class Archive {
         return modulepath;
     }
 
+    /**
+     * Closes the underlying jar (or directory) handle. The loader keeps it open to read classes and
+     * resources on demand for as long as the application runs, so this is for the paths that load an archive
+     * but build no loader from it, and for embedders that discard a loader; afterwards the archive's jars
+     * can no longer be read.
+     */
+    @Override
+    public void close() throws IOException {
+        source.close();
+    }
+
     private void index(Source source) throws IOException {
         byte[] properties = source.open(APPLICATION);
         if (properties != null) {
             application.load(new ByteArrayInputStream(properties));
+        }
+        byte[] signed = source.open(SIGNATURES);
+        if (signed != null) {
+            signatures.load(new ByteArrayInputStream(signed));
         }
         Map<String, List<String>> classpathGroups = new LinkedHashMap<>();
         Map<String, List<String>> modulepathGroups = new LinkedHashMap<>();
@@ -262,14 +313,9 @@ final class Archive {
         }
 
         @Override
-        public byte[] open(String entry) throws IOException {
+        public InputStream stream(String entry) throws IOException {
             ZipEntry zipEntry = zip.getEntry(entry);
-            if (zipEntry == null) {
-                return null;
-            }
-            try (InputStream in = zip.getInputStream(zipEntry)) {
-                return in.readAllBytes();
-            }
+            return zipEntry == null ? null : zip.getInputStream(zipEntry);
         }
 
         @Override
@@ -299,6 +345,11 @@ final class Archive {
             return names;
         }
 
+        @Override
+        public void close() throws IOException {
+            zip.close();
+        }
+
         private static String encode(String entry) {
             try {
                 // The multi-argument URI constructor percent-encodes the path component (keeping '/'),
@@ -315,18 +366,26 @@ final class Archive {
         private final Path root;
 
         DirectorySource(Path root) {
-            this.root = root;
+            this.root = root.toAbsolutePath().normalize();
         }
 
         @Override
-        public byte[] open(String entry) throws IOException {
-            Path file = root.resolve(entry);
-            return Files.isRegularFile(file) ? Files.readAllBytes(file) : null;
+        public InputStream stream(String entry) throws IOException {
+            Path file = confine(entry);
+            return file != null && Files.isRegularFile(file) ? Files.newInputStream(file) : null;
         }
 
         @Override
         public URL url(String entry) {
-            return Files.isRegularFile(root.resolve(entry)) ? baseUrl(entry) : null;
+            Path file = confine(entry);
+            if (file == null || !Files.isRegularFile(file)) {
+                return null;
+            }
+            try {
+                return file.toUri().toURL();
+            } catch (MalformedURLException e) {
+                throw new IllegalStateException("Failed to build a URL for " + entry, e);
+            }
         }
 
         @Override
@@ -354,6 +413,22 @@ final class Archive {
                 }
             }
             return names;
+        }
+
+        @Override
+        public void close() {
+        }
+
+        /**
+         * Resolves {@code entry} against the bundle root, normalised, or {@code null} if it escapes the root.
+         * Entry names reaching {@link #stream}/{@link #url} include arbitrary resource names handed to
+         * {@code getResource*}; without this confinement a name like {@code ../../../etc/passwd} would
+         * resolve on the real filesystem and read a file outside the bundle. (A symlink within the bundle
+         * that points outside is the bundle author's own content and is not guarded here.)
+         */
+        private Path confine(String entry) {
+            Path file = root.resolve(entry).normalize();
+            return file.startsWith(root) ? file : null;
         }
     }
 }

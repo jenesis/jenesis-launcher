@@ -2,6 +2,7 @@ package build.jenesis.launcher;
 
 import module java.base;
 
+import java.security.cert.CertificateException;
 import java.util.jar.Attributes;
 
 /**
@@ -24,28 +25,33 @@ import java.util.jar.Attributes;
  * memory, so {@link #findLibrary(String)} extracts a requested library - from a class-path jar or a bundled
  * module - to a temp file on demand.</p>
  */
-final class InMemoryClassLoader extends ClassLoader {
+final class InMemoryClassLoader extends ClassLoader implements Closeable {
 
     static {
         registerAsParallelCapable();
     }
 
+    private final Archive archive;
     private final List<Archive.Jar> classpath;
     private final Map<String, String> packageToModule = new HashMap<>();
+    private final Map<String, ModuleDescriptor> descriptors = new HashMap<>();
     private final Map<String, ModuleReader> readers = new LinkedHashMap<>();
     private final Map<String, ProtectionDomain> domains = new ConcurrentHashMap<>();
     private final Map<String, Optional<Manifest>> manifests = new ConcurrentHashMap<>();
 
-    InMemoryClassLoader(List<Archive.Jar> classpath, InMemoryModuleFinder finder, ClassLoader parent)
+    InMemoryClassLoader(Archive archive, InMemoryModuleFinder finder, ClassLoader parent)
             throws IOException {
         super("jenesis", parent);
-        this.classpath = classpath;
+        this.archive = archive;
+        this.classpath = archive.classpath();
         if (finder != null) {
             // Finder order is sorted by jar name, so a LinkedHashMap keeps the native-library winner stable.
             for (ModuleReference reference : finder.findAll()) {
-                String module = reference.descriptor().name();
+                ModuleDescriptor descriptor = reference.descriptor();
+                String module = descriptor.name();
                 readers.put(module, reference.open());
-                for (String packageName : reference.descriptor().packages()) {
+                descriptors.put(module, descriptor);
+                for (String packageName : descriptor.packages()) {
                     packageToModule.putIfAbsent(packageName, module);
                 }
             }
@@ -116,8 +122,32 @@ final class InMemoryClassLoader extends ClassLoader {
     }
 
     private ProtectionDomain domain(Archive.Jar jar) {
-        return domains.computeIfAbsent(jar.name(), _ ->
-                new ProtectionDomain(new CodeSource(jar.url(), (CodeSigner[]) null), null));
+        return domains.computeIfAbsent(jar.name(), name ->
+                new ProtectionDomain(new CodeSource(jar.url(), signers(name)), null));
+    }
+
+    /**
+     * The signer certificates to attach to a class-path dependency's {@link CodeSource}, reconstructed from
+     * an optional {@code signatures.properties} entry (Base64 of the signer's PKCS#7 certificate chain),
+     * keyed by the dependency name, or {@code null} when none is declared. This restores the signer identity
+     * that {@link CodeSource#getCodeSigners()} / {@link CodeSource#getCertificates()} report for a dependency
+     * that was a signed jar - the same attested reconstruction the loader already does for a package's
+     * manifest metadata and sealing. It records the signer the bundler attested; it does not cryptographically
+     * re-verify the bundled bytes.
+     */
+    private CodeSigner[] signers(String name) {
+        String encoded = archive.signatures().getProperty(name);
+        if (encoded == null || encoded.isBlank()) {
+            return null;
+        }
+        try {
+            CertPath path = CertificateFactory.getInstance("X.509").generateCertPath(
+                    new ByteArrayInputStream(Base64.getDecoder().decode(encoded.strip())), "PKCS7");
+            return new CodeSigner[] {new CodeSigner(path, null)};
+        } catch (CertificateException | IllegalArgumentException e) {
+            throw new IllegalStateException("Malformed signer certificate chain for '" + name + "' in "
+                    + Archive.SIGNATURES, e);
+        }
     }
 
     private Manifest manifest(Archive.Jar jar) {
@@ -164,6 +194,13 @@ final class InMemoryClassLoader extends ClassLoader {
 
     @Override
     protected URL findResource(String name) {
+        // Mirror BuiltinClassLoader: a bundled module's resources are visible on the flat resource API too,
+        // but only when not encapsulated (see moduleResourceUrls), and modules are consulted before the
+        // class path - as in a real `java -p modulepath -cp classpath` launch.
+        List<URL> module = moduleResourceUrls(name);
+        if (!module.isEmpty()) {
+            return module.get(0);
+        }
         for (Archive.Jar jar : classpath) {
             URL url = jar.url(name);
             if (url != null) {
@@ -175,7 +212,7 @@ final class InMemoryClassLoader extends ClassLoader {
 
     @Override
     protected Enumeration<URL> findResources(String name) {
-        List<URL> urls = new ArrayList<>();
+        List<URL> urls = new ArrayList<>(moduleResourceUrls(name));
         for (Archive.Jar jar : classpath) {
             URL url = jar.url(name);
             if (url != null) {
@@ -183,6 +220,72 @@ final class InMemoryClassLoader extends ClassLoader {
             }
         }
         return Collections.enumeration(urls);
+    }
+
+    /**
+     * The URLs under which {@code name} is visible on the flat resource API from the bundled modules,
+     * reproducing the rule a builtin loader applies (so the launcher matches a real
+     * {@code java -p modulepath -cp classpath} launch). A resource that maps to a module package is served
+     * only when it is a {@code .class} file, a directory, or its package is opened unconditionally (an open
+     * or automatic module, or an unqualified {@code opens}); otherwise it stays encapsulated. A resource in
+     * no module package (a top-level entry, anything under {@code META-INF/}) is served from every module.
+     * Qualified opens and runtime {@code addOpens} do not widen this, matching the JDK.
+     */
+    private List<URL> moduleResourceUrls(String name) {
+        String packageName = toPackageName(name);
+        String module = packageToModule.get(packageName);
+        if (module != null) {
+            URL url = moduleResourceUrl(module, name);
+            if (url != null
+                    && (name.endsWith(".class") || url.toString().endsWith("/") || isOpen(module, packageName))) {
+                return List.of(url);
+            }
+            return List.of();
+        }
+        List<URL> urls = new ArrayList<>();
+        for (String candidate : readers.keySet()) {
+            URL url = moduleResourceUrl(candidate, name);
+            if (url != null) {
+                urls.add(url);
+            }
+        }
+        return urls;
+    }
+
+    private URL moduleResourceUrl(String module, String name) {
+        ModuleReader reader = readers.get(module);
+        if (reader == null) {
+            return null;
+        }
+        try {
+            Optional<URI> uri = reader.find(name);
+            return uri.isPresent() ? uri.get().toURL() : null;
+        } catch (IOException _) {
+            return null;
+        }
+    }
+
+    /** Whether {@code packageName} of {@code module} is opened unconditionally, matching {@code isOpen} in the JDK. */
+    private boolean isOpen(String module, String packageName) {
+        ModuleDescriptor descriptor = descriptors.get(module);
+        if (descriptor == null) {
+            return false;
+        }
+        if (descriptor.isOpen() || descriptor.isAutomatic()) {
+            return true;
+        }
+        for (ModuleDescriptor.Opens opens : descriptor.opens()) {
+            if (!opens.isQualified() && opens.source().equals(packageName)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The package of a resource name (the JDK's {@code Resources.toPackageName}); {@code ""} if it has none. */
+    private static String toPackageName(String name) {
+        int slash = name.lastIndexOf('/');
+        return slash == -1 || slash == name.length() - 1 ? "" : name.substring(0, slash).replace('/', '.');
     }
 
     private byte[] moduleResource(String module, String name) {
@@ -249,5 +352,17 @@ final class InMemoryClassLoader extends ClassLoader {
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to extract native library " + mapped, e);
         }
+    }
+
+    /**
+     * Closes the backing jar (or directory) handle - mirroring {@link java.net.URLClassLoader#close()}. The
+     * launcher never closes the loader of a running application (it must serve classes on demand for the
+     * application's whole lifetime); this lets an embedder that builds and discards loaders release the file
+     * descriptor deterministically rather than waiting for the jar handle to be reclaimed on garbage
+     * collection. Classes already defined keep working; loading further classes or resources will fail.
+     */
+    @Override
+    public void close() throws IOException {
+        archive.close();
     }
 }

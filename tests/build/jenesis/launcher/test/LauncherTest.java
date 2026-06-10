@@ -2,6 +2,7 @@ package build.jenesis.launcher.test;
 
 import module java.base;
 
+import java.security.cert.X509Certificate;
 import build.jenesis.launcher.Launcher;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -13,6 +14,16 @@ class LauncherTest {
 
     @TempDir
     Path directory;
+
+    // A throwaway self-signed EC certificate (CN=Jenesis Test Signer, O=Jenesis) as Base64 DER, used to
+    // exercise the signer-identity reconstruction from signatures.properties.
+    private static final String TEST_SIGNER_CERT =
+            "MIIBeDCCAR6gAwIBAgIJAK+PMEagHyyCMAoGCCqGSM49BAMDMDAxEDAOBgNVBAoTB0plbmVzaXMxHDAaBgNVBAMTE0plbm"
+            + "VzaXMgVGVzdCBTaWduZXIwHhcNMjYwNjEwMTA1OTEzWhcNMzYwNjA3MTA1OTEzWjAwMRAwDgYDVQQKEwdKZW5lc2lzMR"
+            + "wwGgYDVQQDExNKZW5lc2lzIFRlc3QgU2lnbmVyMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE/ZfmNxZmPgkfHXmDPk"
+            + "enwSWZ14ZciWVjS5ZTqYyQIc6cNbRCaPsyjVjlPFE1yRg38YCzNhODIlXARa78XcbaRaMhMB8wHQYDVR0OBBYEFNuWoP"
+            + "xXdyj3dBLO7zZ8XZXvyrtcMAoGCCqGSM49BAMDA0gAMEUCIQCntROQ+WVHLvYOL2I9qGboMoFfhCGPdIF4t/uNv8jdtw"
+            + "IgLs3WcP6Qhzm7JQhWCUNwueheAZczd4zDzbhIo4LtKTI=";
 
     @Test
     void runsClassPathApplication() throws Exception {
@@ -269,6 +280,153 @@ class LauncherTest {
     }
 
     @Test
+    void loadsClassPathResourceFromExplodedDirectory() throws Exception {
+        // The traversal confinement must still allow ordinary in-bundle resources from the directory layout.
+        Path bundle = directory.resolve("dir-resource");
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("demo/dres/Main.class", TestJars.readResourceMain("demo.dres.Main", "greeting.txt"));
+        entries.put("greeting.txt", "hello".getBytes(StandardCharsets.UTF_8));
+        TestJars.writeDirectory(bundle,
+                Map.of("mainClass", "demo.dres.Main"),
+                Map.of("resources.jar", TestJars.jar(entries)),
+                Map.of());
+
+        String key = "jenesis.test.dir.classpath.resource";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("hello");
+    }
+
+    @Test
+    void confinesDirectoryResourceLookupToBundleRoot() throws Exception {
+        // A secret file sits beside the exploded bundle. A class-path resource name that climbs out with
+        // ".." must not read it: DirectorySource confines resolved paths to the bundle root, so the lookup
+        // returns null (and reading the null stream throws) instead of leaking a file outside the bundle.
+        // The file genuinely exists, so only the confinement check stands between the lookup and the read -
+        // without it, this test would observe "TOPSECRET".
+        Files.write(directory.resolve("secret.txt"), "TOPSECRET".getBytes(StandardCharsets.UTF_8));
+        Path bundle = directory.resolve("confined");
+        // From classpath/<dep>/, "../../../secret.txt" resolves to <directory>/secret.txt on disk.
+        byte[] main = TestJars.readResourceMain("demo.cf.Main", "../../../secret.txt");
+        TestJars.writeDirectory(bundle,
+                Map.of("mainClass", "demo.cf.Main"),
+                Map.of("app.jar", TestJars.classJar("demo.cf.Main", main)),
+                Map.of());
+
+        String key = "jenesis.test.confined";
+        System.clearProperty(key);
+        assertThatThrownBy(() -> launch(bundle, key)).isInstanceOf(NullPointerException.class);
+        assertThat(System.getProperty(key)).isNull();
+    }
+
+    @Test
+    void exposesAutomaticModuleResourceOnFlatResourceApi() throws Exception {
+        // A real `java -p ... -cp ...` serves an automatic module's resources through the flat resource API
+        // (automatic modules are open). A class-path main reads one via the context class loader.
+        Path bundle = directory.resolve("auto-res-app.jar");
+        Map<String, byte[]> module = new LinkedHashMap<>();
+        module.put("META-INF/MANIFEST.MF", manifest(Map.of("Automatic-Module-Name", "demo.auto")));
+        module.put("demo/auto/Thing.class", TestJars.setPropertyMain("demo.auto.Thing"));
+        module.put("demo/auto/data.txt", "auto-value".getBytes(StandardCharsets.UTF_8));
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.app.Main"),
+                Map.of("app.jar", TestJars.classJar("demo.app.Main",
+                        TestJars.readResourceMain("demo.app.Main", "demo/auto/data.txt"))),
+                Map.of("auto.jar", TestJars.jar(module)));
+
+        String key = "jenesis.test.auto.resource";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("auto-value");
+    }
+
+    @Test
+    void exposesModuleNonPackageResourceOnFlatResourceApi() throws Exception {
+        // A resource in no module package (here under META-INF) is served from a module unconditionally,
+        // even from an explicit module that opens nothing - matching BuiltinClassLoader.findMiscResource.
+        Path bundle = directory.resolve("meta-res-app.jar");
+        Map<String, byte[]> module = new LinkedHashMap<>();
+        module.put("module-info.class", TestJars.moduleInfo("demo.lib"));
+        module.put("demo/lib/Tool.class", TestJars.setPropertyMain("demo.lib.Tool"));
+        module.put("META-INF/demo-flat.txt", "flat-value".getBytes(StandardCharsets.UTF_8));
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.app.Main"),
+                Map.of("app.jar", TestJars.classJar("demo.app.Main",
+                        TestJars.readResourceMain("demo.app.Main", "META-INF/demo-flat.txt"))),
+                Map.of("lib.jar", TestJars.jar(module)));
+
+        String key = "jenesis.test.meta.resource";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("flat-value");
+    }
+
+    @Test
+    void hidesEncapsulatedModulePackageResourceFromFlatResourceApi() throws Exception {
+        // A resource inside a non-open package of an explicit module stays encapsulated on the flat resource
+        // API, exactly as a real modular launch hides it (the package is neither open nor automatic), so the
+        // context-loader lookup returns null and reading it throws.
+        Path bundle = directory.resolve("hidden-res-app.jar");
+        Map<String, byte[]> module = new LinkedHashMap<>();
+        module.put("module-info.class", TestJars.moduleInfo("demo.lib"));
+        module.put("demo/lib/Tool.class", TestJars.setPropertyMain("demo.lib.Tool"));
+        module.put("demo/lib/secret.txt", "secret-value".getBytes(StandardCharsets.UTF_8));
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.app.Main"),
+                Map.of("app.jar", TestJars.classJar("demo.app.Main",
+                        TestJars.readResourceMain("demo.app.Main", "demo/lib/secret.txt"))),
+                Map.of("lib.jar", TestJars.jar(module)));
+
+        String key = "jenesis.test.hidden.resource";
+        System.clearProperty(key);
+        assertThatThrownBy(() -> launch(bundle, key)).isInstanceOf(NullPointerException.class);
+        assertThat(System.getProperty(key)).isNull();
+    }
+
+    @Test
+    void reconstructsSignerIdentityFromSignaturesProperties() throws Exception {
+        // A signed class-path dependency loses its signer when exploded; signatures.properties carries the
+        // signer certificate chain (Base64 PKCS#7), and the launcher reconstructs it onto the CodeSource so
+        // getCodeSource().getCertificates() reports the original signer.
+        CertificateFactory factory = CertificateFactory.getInstance("X.509");
+        X509Certificate certificate = (X509Certificate) factory.generateCertificate(
+                new ByteArrayInputStream(Base64.getDecoder().decode(TEST_SIGNER_CERT)));
+        String chain = Base64.getEncoder().encodeToString(
+                factory.generateCertPath(List.of(certificate)).getEncoded("PKCS7"));
+        String expected = certificate.getSubjectX500Principal().getName();
+
+        Path bundle = directory.resolve("signed-app.jar");
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("application.properties", properties(Map.of("mainClass", "demo.sig.Main")));
+        entries.put("signatures.properties", properties(Map.of("app.jar", chain)));
+        entries.put("classpath/app.jar/demo/sig/Main.class", TestJars.codeSourceSignerMain("demo.sig.Main"));
+        Files.write(bundle, TestJars.jar(entries));
+
+        String key = "jenesis.test.signer";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo(expected);
+    }
+
+    @Test
+    void omitsSignersWithoutSignaturesProperties() throws Exception {
+        // The feature is strictly opt-in: with no signatures.properties the CodeSource carries no signers,
+        // so getCertificates() is null and reading it throws.
+        Path bundle = directory.resolve("unsigned-app.jar");
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("application.properties", properties(Map.of("mainClass", "demo.sig.Main")));
+        entries.put("classpath/app.jar/demo/sig/Main.class", TestJars.codeSourceSignerMain("demo.sig.Main"));
+        Files.write(bundle, TestJars.jar(entries));
+
+        assertThatThrownBy(() -> launch(bundle, "jenesis.test.unsigned"))
+                .isInstanceOf(NullPointerException.class);
+    }
+
+    @Test
     void resolvesResourcesWhenBundlePathHasSpaces() throws Exception {
         // A space in both the bundle path and the resource name forces correct jar: URL percent-encoding.
         Path folder = Files.createDirectories(directory.resolve("with space"));
@@ -383,6 +541,14 @@ class LauncherTest {
         attributes.forEach(manifest.getMainAttributes()::putValue);
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         manifest.write(out);
+        return out.toByteArray();
+    }
+
+    private static byte[] properties(Map<String, String> entries) throws Exception {
+        Properties properties = new Properties();
+        entries.forEach(properties::setProperty);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        properties.store(out, null);
         return out.toByteArray();
     }
 

@@ -34,12 +34,17 @@ final class ArchiveModuleReader implements ModuleReader {
 
     @Override
     public Optional<InputStream> open(String name) {
-        byte[] data = jar.open(name);
-        return data == null ? Optional.empty() : Optional.of(new ByteArrayInputStream(data));
+        // Stream straight from the still-open jar/directory instead of buffering the whole entry; the caller
+        // closes the stream, as the ModuleReader contract requires.
+        InputStream in = jar.stream(name);
+        return in == null ? Optional.empty() : Optional.of(in);
     }
 
     @Override
     public Optional<ByteBuffer> read(String name) {
+        // read hands back a random-access buffer by contract, so its bytes must be materialised here; open
+        // (above) is the streaming path. Class loading and getResourceAsStream go through open and jar:/file:
+        // URLs, not read, so this buffering is off the hot path.
         byte[] data = jar.open(name);
         return data == null ? Optional.empty() : Optional.of(ByteBuffer.wrap(data).asReadOnlyBuffer());
     }

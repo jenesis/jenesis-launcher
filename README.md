@@ -201,6 +201,25 @@ Directives within a property are separated by `;` and targets within a directive
 module name or `ALL-UNNAMED`. The source must be one of the bundled modules (the `Controller` can only
 break encapsulation of the modules it defined); targets may be bundled, boot, or the unnamed module.
 
+### Emulating a signed jar
+
+A dependency that shipped as a *signed* jar loses its signer identity when exploded: its signature files
+(`META-INF/*.SF`, `*.RSA`/`*.DSA`/`*.EC`) become ordinary entries, so a class-path class would otherwise
+define with a `CodeSource` that has no signers. An optional `signatures.properties` at the bundle root
+restores it - keyed by the exploded dependency's name (its `classpath/<name>/` folder), valued with Base64
+of the signer's PKCS#7 certificate chain:
+
+```
+guava.jar=MIIF...                            # Base64 of the signer's certificate chain (PKCS#7)
+```
+
+For each listed class-path dependency the launcher reconstructs a `CodeSigner` and attaches it to that
+dependency's `CodeSource`, so `getProtectionDomain().getCodeSource().getCodeSigners()` and
+`getCertificates()` report the original signer - the same attested reconstruction the launcher already does
+for a package's manifest metadata and sealing. This records the signer the bundler attested at build time;
+it is **not** a cryptographic re-verification of the bundled bytes, and it applies to class-path
+dependencies (module classes carry no `CodeSource`). Dependencies not listed are unaffected.
+
 ### Reading the bundle on demand
 
 Because each dependency is exploded into a subfolder, every class and resource is a direct entry of the
@@ -210,12 +229,19 @@ outer jar, so the launcher reads each one only when first needed - no nested-jar
   entry names, and groups them by `classpath/<name>/` and `modulepath/<name>/` into lazy `Jar` handles.
   Each handle reads an entry's bytes on demand and hands out a standard `jar:`/`file:` URL for it. For a
   multi-release dependency it serves the highest `META-INF/versions/<n>/` entry the runtime supports,
-  having noted at index time which releases the dependency actually ships.
+  having noted at index time which releases the dependency actually ships. In the exploded-directory
+  layout a requested name is resolved only within the bundle root, so a `..` segment in a resource name
+  cannot escape it onto the host filesystem; the jar layout is inherently confined, since entries are
+  matched by exact name.
 * `InMemoryClassLoader` is the single loader for everything. It holds no class or resource bytes - only
   the `Jar` handles and a package-to-module index - and reads (then discards) a class's bytes from the
-  open jar when the VM asks for it. Class-path resources are returned as `jar:`/`file:` URLs, so
+  open jar when the VM asks for it. Resources are returned as `jar:`/`file:` URLs, so
   `ClassLoader#getResources` - and therefore `ServiceLoader` for class-path providers - works with the
-  JDK's own handlers.
+  JDK's own handlers. `getResource`/`getResources` expose a bundled module's resources exactly as a
+  builtin loader does: a resource in a module package only when that package is opened unconditionally
+  (or the resource is a `.class` file), and a resource in no package (a top-level entry, anything under
+  `META-INF/`) unconditionally - so a resource in a non-open package stays encapsulated, while everything
+  a real `java -p ... -cp ...` launch would expose is found.
 * `InMemoryModuleFinder` builds a `ModuleDescriptor` per module (read from `module-info.class`, or derived
   for automatic modules from `Automatic-Module-Name` / the original jar file name, with `META-INF/services`
   providers scanned in), backed by an `ArchiveModuleReader` whose `find` returns each entry's `jar:`/`file:`
@@ -231,10 +257,12 @@ The following are worth knowing before bundling an application.
   with a `CodeSource` and a package whose location is the dependency's URL *inside* the outer jar (e.g.
   `jar:file:/…/foo.jar!/classpath/dep.jar/`), populated from that dependency's manifest - so
   `Package#getImplementationVersion`, sealed packages, and `getProtectionDomain().getCodeSource()` all
-  work. But it is not a standalone jar on disk, so the "open my own jar file" idiom still fails, and **JAR
-  signatures are not verified** (a dependency's signature files are exploded as ordinary entries and
-  ignored). Module classes carry no `CodeSource` - the module system, not a manifest, governs their
-  packages.
+  work. But it is not a standalone jar on disk, so the "open my own jar file" idiom still fails. **JAR
+  signatures are not cryptographically verified** - a dependency's signature files are exploded as ordinary
+  entries; the optional [`signatures.properties`](#emulating-a-signed-jar) reconstructs a class-path
+  dependency's signer *identity* so `CodeSource#getCodeSigners`/`getCertificates` report it, but it attests
+  rather than re-verifies. Module classes carry no `CodeSource` - the module system, not a manifest, governs
+  their packages.
 
 * **The module graph is fixed to the bundle plus the default boot modules.** Every bundled module is
   bound as a root against the boot layer; you can add `reads` / `opens` / `exports` edges for bundled
@@ -244,16 +272,13 @@ The following are worth knowing before bundling an application.
   unresolved JDK module fails at startup; the fix is `java --add-modules jdk.incubator.vector -jar
   foo.jar`, which augments the boot layer that the child layer reads.
 
-* **Module-internal resources are not on the flat class-loader resource API.** `ClassLoader#getResource`
-  and `getResources` on the loader serve only class-path resources. A resource inside a module is
-  reachable only through a class in that module (`Class#getResourceAsStream`) or `ServiceLoader`, matching
-  JPMS encapsulation - so `contextClassLoader.getResourceAsStream("some/module/internal.txt")` will not
-  find it.
-
 * **Read on demand, but the jar stays open.** Class and resource bytes are read from the still-open outer
   jar (or directory) when first needed and not retained, so heap use is roughly the entry-name index
   rather than the dependencies' bytes. The trade-off is open file handles for the process lifetime: the
   launcher's own `ZipFile`, plus a `JarURLConnection`-cached `JarFile` once resource URLs are opened.
+  `InMemoryClassLoader` is `Closeable` (like `URLClassLoader`), so an embedder that builds and discards
+  loaders can release those handles deterministically; under `java -jar` the loader stays open for the
+  application's lifetime, as it must.
 
 * **Native libraries.** A JNI library cannot be loaded from memory, so `InMemoryClassLoader` extracts a
   requested library to a temp file on demand (`findLibrary`), from a class-path jar or a bundled module
@@ -265,9 +290,13 @@ The following are worth knowing before bundling an application.
   the system loader. This is by design and is the faithful way to keep them modular; it is also why the
   module graph is fixed as described above.
 
-Two behaviours are intentional rather than limitations: a package owned by a module **shadows** the same
-package on the class path (the JDK's own rule), and bundled agents need a manifest attribute to obtain an
-`Instrumentation` (see [Bundled Java agents](#bundled-java-agents)).
+Three behaviours are intentional rather than limitations: a package owned by a module **shadows** the same
+package on the class path (the JDK's own rule); a resource inside a **non-open module package** is not on
+the flat `getResource`/`getResources` API - `contextClassLoader.getResourceAsStream("some/module/internal.txt")`
+finds it only if that package is opened - exactly as a real `java -p ... -cp ...` launch encapsulates it
+(everything that launch *would* expose, including `META-INF/` and automatic-module resources, the launcher
+now serves); and bundled agents need a manifest attribute to obtain an `Instrumentation` (see
+[Bundled Java agents](#bundled-java-agents)).
 
 ## Building
 
@@ -280,9 +309,13 @@ java build/jenesis/Project.java stage    # stage the published artifact under ta
 
 The tests synthesise class files and exploded-bundle fixtures with the JDK Class-File API and drive
 `Launcher#run` end to end (class-path and modular apps, automatic-module naming, resources via
-`jar:`/`file:` URLs from both a jar and an exploded directory, a bundle path with spaces, a module
-reading the class path, split-package shadowing, native-library extraction, multi-release class selection,
-package metadata and sealing from the manifest, `addExports`/`addOpens`/`addReads` grants, bundled
+`jar:`/`file:` URLs from both a jar and an exploded directory, resource names in the directory layout
+confined to the bundle root, a bundle path with spaces, module resources on the flat resource API
+honoring JPMS encapsulation (automatic-module and `META-INF/` resources served, a non-open package's
+resource hidden), a module reading the class path, split-package shadowing, native-library extraction,
+multi-release class selection,
+package metadata and sealing from the manifest, signer identity reconstructed from `signatures.properties`,
+`addExports`/`addOpens`/`addReads` grants, bundled
 agents whose `premain` runs - in declaration order, with arguments - before the main class, and an agent
 bundle with no main started through `runAgents`).
 

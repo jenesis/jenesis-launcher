@@ -32,6 +32,36 @@ final class TestJars {
                 .return_());
     }
 
+    /**
+     * A class whose {@code main} stores its own code source's leaf signer distinguished name into
+     * {@code System.setProperty(args[0], cert.getSubjectX500Principal().getName())} - exercising the signer
+     * identity reconstructed from {@code signatures.properties}. Throws if the code source carries no signers.
+     */
+    static byte[] codeSourceSignerMain(String binaryName) {
+        ClassDesc protectionDomain = ClassDesc.of("java.security.ProtectionDomain");
+        ClassDesc codeSource = ClassDesc.of("java.security.CodeSource");
+        ClassDesc certificate = ClassDesc.of("java.security.cert.Certificate");
+        ClassDesc x509Certificate = ClassDesc.of("java.security.cert.X509Certificate");
+        ClassDesc x500Principal = ClassDesc.of("javax.security.auth.x500.X500Principal");
+        return main(binaryName, code -> code
+                .loadConstant(ClassDesc.of(binaryName))
+                .invokevirtual(ConstantDescs.CD_Class, "getProtectionDomain", MethodTypeDesc.of(protectionDomain))
+                .invokevirtual(protectionDomain, "getCodeSource", MethodTypeDesc.of(codeSource))
+                .invokevirtual(codeSource, "getCertificates", MethodTypeDesc.of(certificate.arrayType()))
+                .iconst_0()
+                .aaload()
+                .checkcast(x509Certificate)
+                .invokevirtual(x509Certificate, "getSubjectX500Principal", MethodTypeDesc.of(x500Principal))
+                .invokevirtual(x500Principal, "getName", MethodTypeDesc.of(ConstantDescs.CD_String))
+                .astore(1)
+                .aload(0).iconst_0().aaload()
+                .aload(1)
+                .invokestatic(CD_System, "setProperty",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String, ConstantDescs.CD_String))
+                .pop()
+                .return_());
+    }
+
     /** A class whose {@code main} runs {@code System.setProperty(args[0], value)} for a fixed {@code value}. */
     static byte[] constantPropertyMain(String binaryName, String value) {
         return main(binaryName, code -> code

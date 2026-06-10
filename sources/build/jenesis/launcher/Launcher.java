@@ -69,6 +69,9 @@ public final class Launcher {
         Archive archive = Archive.load(location);
         String mainClass = archive.application().getProperty("mainClass");
         if (mainClass != null && !mainClass.isBlank()) {
+            // An application bundle: its agents are run by Launcher.run, and no loader is built here, so
+            // close the archive we just opened rather than leaking its jar handle until the next GC.
+            archive.close();
             return;
         }
         InMemoryClassLoader loader = prepare(archive);
@@ -117,11 +120,11 @@ public final class Launcher {
                     .resolveAndBind(finder, ModuleFinder.of(), finder.moduleNames());
             // Resolve and construct the loader first: defineModules records each module's packages against
             // the loader, after which class loading may begin.
-            loader = new InMemoryClassLoader(archive.classpath(), finder, system);
+            loader = new InMemoryClassLoader(archive, finder, system);
             controller = ModuleLayer.defineModules(configuration, List.of(ModuleLayer.boot()), _ -> loader);
             layer = controller.layer();
         } else {
-            loader = new InMemoryClassLoader(archive.classpath(), null, system);
+            loader = new InMemoryClassLoader(archive, null, system);
         }
         if (controller != null && mainModule != null && !mainModule.isBlank()
                 && mainClass != null && !mainClass.isBlank()) {
