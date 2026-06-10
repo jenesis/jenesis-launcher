@@ -145,6 +145,41 @@ loader, so any number can be attached at once. The Jenesis bundler emits this tr
 Class-File API instructions); `LauncherAgent` is the shared default for the single-agent and application
 cases.
 
+Generating the trampoline takes only the JDK Class-File API. For a `binaryName` unique to the bundle
+(which becomes the manifest `Premain-Class`/`Agent-Class`):
+
+```java
+import java.lang.classfile.ClassFile;
+import java.lang.constant.ClassDesc;
+import java.lang.constant.ConstantDescs;
+import java.lang.constant.MethodTypeDesc;
+
+/** Bytes of a Premain-Class whose premain/agentmain call Launcher.runAgents(<this class>, attach, args, inst). */
+static byte[] trampoline(String binaryName) {
+    ClassDesc self = ClassDesc.of(binaryName);
+    ClassDesc launcher = ClassDesc.of("build.jenesis.launcher.Launcher");
+    ClassDesc instrumentation = ClassDesc.of("java.lang.instrument.Instrumentation");
+    MethodTypeDesc agentMethod = MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_String, instrumentation);
+    MethodTypeDesc runAgents = MethodTypeDesc.of(ConstantDescs.CD_void,
+            ConstantDescs.CD_Class, ConstantDescs.CD_boolean, ConstantDescs.CD_String, instrumentation);
+    return ClassFile.of().build(self, cb -> {
+        cb.withFlags(ClassFile.ACC_PUBLIC | ClassFile.ACC_FINAL);
+        cb.withMethodBody("premain", agentMethod, ClassFile.ACC_PUBLIC | ClassFile.ACC_STATIC, code -> code
+                .loadConstant(self).iconst_0().aload(0).aload(1)        // runAgents(self, false, args, inst)
+                .invokestatic(launcher, "runAgents", runAgents).return_());
+        cb.withMethodBody("agentmain", agentMethod, ClassFile.ACC_PUBLIC | ClassFile.ACC_STATIC, code -> code
+                .loadConstant(self).iconst_1().aload(0).aload(1)        // runAgents(self, true, args, inst)
+                .invokestatic(launcher, "runAgents", runAgents).return_());
+    });
+}
+```
+
+The rest is plain jar assembly (no Class-File API): write those bytes at `binaryName`'s path, set the
+manifest `Premain-Class` and `Agent-Class` to `binaryName`, and lay out `application.properties`
+(`agentClass=...`), the exploded `classpath/<name>/` and `modulepath/<name>/` dependencies, and the
+launcher's own classes as for any bundle. Each such bundle reads *its own* `application.properties` and
+dependencies, because `runAgents` resolves them from the trampoline's code source.
+
 ### Relaxing module access
 
 A bundled module sometimes needs reflective access a framework expects but its `module-info` does not
