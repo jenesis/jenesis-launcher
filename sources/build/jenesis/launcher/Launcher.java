@@ -1,8 +1,7 @@
 package build.jenesis.launcher;
 
 import module java.base;
-
-import java.lang.instrument.Instrumentation;
+import module java.instrument;
 
 /**
  * Entry point for an executable jar produced by Jenesis, and the bootstrap for using such a bundle as a

@@ -1,8 +1,7 @@
 package build.jenesis.launcher;
 
 import module java.base;
-
-import java.lang.instrument.Instrumentation;
+import module java.instrument;
 
 /**
  * The launcher's own Java agent: the single agent the JVM knows about, standing in for the agents bundled
