@@ -165,6 +165,35 @@ final class TestJars {
     }
 
     /**
+     * A class whose {@code main} loads {@code target} through the thread context class loader and stores the
+     * name of that class's module into {@code System.setProperty(args[0], String.valueOf(getModule().getName()))}
+     * - {@code "<name>"} when {@code target}'s module was resolved into the layer, {@code "null"} when it was
+     * not (its class then loads into the unnamed module). Observes whether a bundled module was rooted.
+     */
+    static byte[] reflectModuleNameMain(String binaryName, String target) {
+        ClassDesc cdClass = ClassDesc.of("java.lang.Class");
+        ClassDesc cdModule = ClassDesc.of("java.lang.Module");
+        return main(binaryName, code -> code
+                .loadConstant(target)
+                .iconst_0()
+                .invokestatic(CD_Thread, "currentThread", MethodTypeDesc.of(CD_Thread))
+                .invokevirtual(CD_Thread, "getContextClassLoader", MethodTypeDesc.of(CD_ClassLoader))
+                .invokestatic(cdClass, "forName",
+                        MethodTypeDesc.of(cdClass, ConstantDescs.CD_String, ConstantDescs.CD_boolean, CD_ClassLoader))
+                .invokevirtual(cdClass, "getModule", MethodTypeDesc.of(cdModule))
+                .invokevirtual(cdModule, "getName", MethodTypeDesc.of(ConstantDescs.CD_String))
+                .invokestatic(ConstantDescs.CD_String, "valueOf",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_Object))
+                .astore(1)
+                .aload(0).iconst_0().aaload()
+                .aload(1)
+                .invokestatic(CD_System, "setProperty",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String, ConstantDescs.CD_String))
+                .pop()
+                .return_());
+    }
+
+    /**
      * An agent class whose {@code premain(String)} appends {@code tag} to the system property
      * {@code key}: {@code System.setProperty(key, System.getProperty(key, "") + tag)}. Appending makes
      * the invocation order of several agents observable.
@@ -309,8 +338,45 @@ final class TestJars {
 
     /** A {@code module-info.class} for an explicit module that requires {@code java.base} and exports nothing. */
     static byte[] moduleInfo(String moduleName) {
-        return ClassFile.of().buildModule(ModuleAttribute.of(ModuleDesc.of(moduleName), builder ->
-                builder.requires(ModuleDesc.of("java.base"), ClassFile.ACC_MANDATED, null)));
+        return moduleInfo(moduleName, Set.of(), Set.of());
+    }
+
+    /**
+     * A {@code module-info.class} for an explicit module requiring {@code java.base} plus each name in
+     * {@code requires}, and exporting each package in {@code exports} unqualified.
+     */
+    static byte[] moduleInfo(String moduleName, Set<String> requires, Set<String> exports) {
+        return ClassFile.of().buildModule(ModuleAttribute.of(ModuleDesc.of(moduleName), builder -> {
+            builder.requires(ModuleDesc.of("java.base"), ClassFile.ACC_MANDATED, null);
+            for (String require : requires) {
+                builder.requires(ModuleDesc.of(require), 0, null);
+            }
+            for (String export : exports) {
+                builder.exports(PackageDesc.of(export), 0);
+            }
+        }));
+    }
+
+    /**
+     * A class with a {@code public static void run(String)} that stores the name of its own module into
+     * {@code System.setProperty(arg, String.valueOf(getModule().getName()))} - {@code "<name>"} when the
+     * class loads as a resolved named module, {@code "null"} when it falls into the unnamed module (its
+     * module was not resolved into the layer). Distinguishes a rooted module from a merely-loaded class.
+     */
+    static byte[] moduleNameRunner(String binaryName) {
+        ClassDesc cdClass = ClassDesc.of("java.lang.Class");
+        ClassDesc cdModule = ClassDesc.of("java.lang.Module");
+        return method(binaryName, "run", MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_String), code -> code
+                .aload(0)
+                .loadConstant(ClassDesc.of(binaryName))
+                .invokevirtual(cdClass, "getModule", MethodTypeDesc.of(cdModule))
+                .invokevirtual(cdModule, "getName", MethodTypeDesc.of(ConstantDescs.CD_String))
+                .invokestatic(ConstantDescs.CD_String, "valueOf",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_Object))
+                .invokestatic(CD_System, "setProperty",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String, ConstantDescs.CD_String))
+                .pop()
+                .return_());
     }
 
     /** A class with a {@code public static void run(String)} that runs {@code System.setProperty(arg, value)}. */
@@ -329,6 +395,16 @@ final class TestJars {
     static byte[] callRunMain(String binaryName, String target) {
         return main(binaryName, code -> code
                 .aload(0).iconst_0().aaload()
+                .invokestatic(ClassDesc.of(target), "run",
+                        MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_String))
+                .return_());
+    }
+
+    /** A class with a {@code public static void run(String)} that delegates to {@code target.run(arg)} -
+     * the middle link of a caller -&gt; this -&gt; target chain, needing {@code target}'s package readable here. */
+    static byte[] callRunRunner(String binaryName, String target) {
+        return method(binaryName, "run", MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_String), code -> code
+                .aload(0)
                 .invokestatic(ClassDesc.of(target), "run",
                         MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_String))
                 .return_());
@@ -372,6 +448,15 @@ final class TestJars {
     /** A jar holding a single class. */
     static byte[] classJar(String binaryName, byte[] classBytes) throws IOException {
         return jar(Map.of(binaryName.replace('.', '/') + ".class", classBytes));
+    }
+
+    /** A jar holding a class plus a real {@code module-info.class} for an explicit module. */
+    static byte[] modularJar(String moduleName, String binaryName, byte[] classBytes,
+                             Set<String> requires, Set<String> exports) throws IOException {
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("module-info.class", moduleInfo(moduleName, requires, exports));
+        entries.put(binaryName.replace('.', '/') + ".class", classBytes);
+        return jar(entries);
     }
 
     /** A jar holding a class plus an {@code Automatic-Module-Name} manifest header. */

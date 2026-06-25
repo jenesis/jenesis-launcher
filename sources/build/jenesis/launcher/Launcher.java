@@ -115,8 +115,21 @@ public final class Launcher {
         ModuleLayer layer = null;
         if (!archive.modulepath().isEmpty()) {
             InMemoryModuleFinder finder = new InMemoryModuleFinder(archive.modulepath());
+            // Reproduce `java -m <mainModule>`: root the main module and let resolution pull in its
+            // `requires` closure (resolveAndBind also binds services). Unless this is a self-contained module
+            // graph - a main module over a pure named-module path - every module is rooted instead, the
+            // in-bundle `--add-modules ALL-MODULE-PATH`. Self-containment is broken by an automatic module
+            // (declares no `requires`, so a named module it uses only internally is never resolved) or by a
+            // class path (an unnamed module readable only through resolved modules); an agent bundle has no
+            // main module to root.
+            boolean automatic = finder.findAll().stream().anyMatch(reference -> reference.descriptor().isAutomatic());
+            boolean selfContainedModuleGraph = mainModule != null
+                    && !mainModule.isBlank()
+                    && !automatic
+                    && archive.classpath().isEmpty();
+            Set<String> roots = selfContainedModuleGraph ? Set.of(mainModule) : finder.moduleNames();
             java.lang.module.Configuration configuration = ModuleLayer.boot().configuration()
-                    .resolveAndBind(finder, ModuleFinder.of(), finder.moduleNames());
+                    .resolveAndBind(finder, ModuleFinder.of(), roots);
             // Resolve and construct the loader first: defineModules records each module's packages against
             // the loader, after which class loading may begin.
             loader = new InMemoryClassLoader(archive, finder, system);

@@ -113,6 +113,80 @@ class LauncherTest {
     }
 
     @Test
+    void resolvesRequiredModuleForExplicitModularMain() throws Exception {
+        // An explicit main module that `requires` a named library, with no automatic module present. The
+        // launcher roots only the main module (faithful `java -m`); the library is still resolved - and
+        // loads as the named module `demo.lib`, not the unnamed module - because the main requires it.
+        Path bundle = directory.resolve("modular-requires-app.jar");
+        byte[] library = TestJars.modularJar("demo.lib", "demo.lib.Lib",
+                TestJars.moduleNameRunner("demo.lib.Lib"), Set.of(), Set.of("demo.lib"));
+        byte[] application = TestJars.modularJar("demo.main", "demo.main.Main",
+                TestJars.callRunMain("demo.main.Main", "demo.lib.Lib"), Set.of("demo.lib"), Set.of());
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.main", "mainClass", "demo.main.Main"),
+                Map.of(),
+                Map.of("demo-lib.jar", library, "demo-main.jar", application));
+
+        String key = "jenesis.test.modular.requires";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("demo.lib");
+    }
+
+    @Test
+    void rootsEveryModuleWhenAnAutomaticModuleNeedsANamedModule() throws Exception {
+        // The compiled-module -> automatic-module -> named-module chain. The main module requires an
+        // automatic module whose code uses a named library the main module does NOT require. An automatic
+        // module declares no `requires`, so the library is reached only because an automatic module on the
+        // path makes the launcher root the whole module path (the in-bundle ALL-MODULE-PATH); the library
+        // then resolves as the named module `demo.lib`. Rooting only the main module would leave the library
+        // in the unnamed module, and `demo.lib.Lib` would report `null`.
+        Path bundle = directory.resolve("automatic-chain-app.jar");
+        byte[] library = TestJars.modularJar("demo.lib", "demo.lib.Lib",
+                TestJars.moduleNameRunner("demo.lib.Lib"), Set.of(), Set.of("demo.lib"));
+        byte[] bridge = TestJars.automaticModuleJar("demo.auto", "demo.auto.Bridge",
+                TestJars.callRunRunner("demo.auto.Bridge", "demo.lib.Lib"));
+        byte[] application = TestJars.modularJar("demo.main", "demo.main.Main",
+                TestJars.callRunMain("demo.main.Main", "demo.auto.Bridge"), Set.of("demo.auto"), Set.of());
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.main", "mainClass", "demo.main.Main"),
+                Map.of(),
+                Map.of("demo-lib.jar", library, "demo-auto.jar", bridge, "demo-main.jar", application));
+
+        String key = "jenesis.test.automatic.chain";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("demo.lib");
+    }
+
+    @Test
+    void rootsEveryModuleWhenAClassPathIsPresent() throws Exception {
+        // A class path (a plain jar) alongside an explicit main module makes the module path not a
+        // self-contained graph, so the launcher roots the whole path. A second named module the main does
+        // NOT require therefore resolves as `demo.extra` rather than falling into the unnamed module - the
+        // main reflectively loads it and reports its module name. Rooting only the main module (the
+        // self-contained path) would leave it unresolved and the name would be "null".
+        Path bundle = directory.resolve("classpath-roots-app.jar");
+        byte[] extra = TestJars.modularJar("demo.extra", "demo.extra.Probe",
+                TestJars.runner("demo.extra.Probe", "unused"), Set.of(), Set.of());
+        byte[] application = TestJars.modularJar("demo.main", "demo.main.Main",
+                TestJars.reflectModuleNameMain("demo.main.Main", "demo.extra.Probe"), Set.of(), Set.of());
+        byte[] plain = TestJars.classJar("cp.Filler", TestJars.runner("cp.Filler", "unused"));
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.main", "mainClass", "demo.main.Main"),
+                Map.of("filler.jar", plain),
+                Map.of("demo-main.jar", application, "demo-extra.jar", extra));
+
+        String key = "jenesis.test.classpath.roots";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("demo.extra");
+    }
+
+    @Test
     void runsAgentsBeforeMainInDeclaredOrder() throws Exception {
         // Two agents each append their tag to a property; main copies it. That main sees "AB" proves
         // both agents' premain ran, in the order declared by agentClass, before the main class loaded.
