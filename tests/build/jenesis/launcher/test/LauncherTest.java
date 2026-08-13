@@ -827,6 +827,93 @@ class LauncherTest {
     }
 
     @Test
+    void deniesNamedModuleAccessToTheClassPath() throws Exception {
+        // The type the main module calls only exists in a class-path jar. No `requires` can name the unnamed
+        // module and no readability rule covers it, so this is denied exactly as `java -p ... -cp ...` denies
+        // it - the class path is reached by declaring an alias for the dependency, not by relaxing the layer.
+        Path bundle = directory.resolve("reads-unnamed-app.jar");
+        byte[] application = TestJars.modularJar("demo.main", "demo.main.Main",
+                TestJars.callRunMain("demo.main.Main", "cp.Tool"), Set.of(), Set.of());
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.main", "mainClass", "demo.main.Main"),
+                Map.of("tool.jar", TestJars.classJar("cp.Tool", TestJars.runner("cp.Tool", "from-class-path"))),
+                Map.of("demo-main.jar", application));
+
+        assertThatThrownBy(() -> launch(bundle, "jenesis.test.reads.unnamed"))
+                .isInstanceOf(IllegalAccessError.class);
+    }
+
+    @Test
+    void findsAnAliasedJarUnderItsDeclaredName() throws Exception {
+        // demo.main requires demo.tool, the name its build declared as an alias for a dependency without module
+        // identity. The bundle kept the resolved file name of that dependency, which derives no usable module
+        // name, so the Jenesis-Aliases header of the module that declared the alias is what makes it resolvable.
+        Path bundle = directory.resolve("alias-app.jar");
+        Map<String, byte[]> module = new LinkedHashMap<>();
+        module.put("module-info.class", TestJars.moduleInfo("demo.main", Set.of("demo.tool"), Set.of()));
+        module.put("META-INF/MANIFEST.MF", manifest(Map.of("Jenesis-Aliases", "demo.tool=org.example/tool")));
+        module.put("demo/main/Main.class", TestJars.callRunMain("demo.main.Main", "tool.Tool"));
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.main", "mainClass", "demo.main.Main"),
+                Map.of(),
+                Map.of("demo-main.jar", TestJars.jar(module),
+                        "org.example%2Ftool%2F1.0.jar",
+                        TestJars.classJar("tool.Tool", TestJars.runner("tool.Tool", "from-alias"))));
+
+        String key = "jenesis.test.alias.name";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("from-alias");
+    }
+
+    @Test
+    void ignoresAnAliasDeclarationWithoutAnEncodedTarget() throws Exception {
+        // What a Jenesis build itself produces: it renames the target to <alias>.jar, so the name derives from
+        // the file name and the header only restates it. The declaration matches no encoded file name and is
+        // dropped rather than reported.
+        Path bundle = directory.resolve("renamed-alias-app.jar");
+        Map<String, byte[]> module = new LinkedHashMap<>();
+        module.put("module-info.class", TestJars.moduleInfo("demo.main", Set.of("demo.tool"), Set.of()));
+        module.put("META-INF/MANIFEST.MF", manifest(Map.of("Jenesis-Aliases", "demo.tool=org.example/tool")));
+        module.put("demo/main/Main.class", TestJars.callRunMain("demo.main.Main", "tool.Tool"));
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.main", "mainClass", "demo.main.Main"),
+                Map.of(),
+                Map.of("demo-main.jar", TestJars.jar(module),
+                        "demo.tool.jar",
+                        TestJars.classJar("tool.Tool", TestJars.runner("tool.Tool", "from-renamed"))));
+
+        String key = "jenesis.test.alias.renamed";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("from-renamed");
+    }
+
+    @Test
+    void rejectsTwoAliasesForOneJar() throws Exception {
+        // A jar can be found under one name only, so two declarations for the same target cannot both be
+        // honoured; picking one would resolve a graph the build never validated.
+        Path bundle = directory.resolve("double-alias-app.jar");
+        Map<String, byte[]> module = new LinkedHashMap<>();
+        module.put("module-info.class", TestJars.moduleInfo("demo.main", Set.of("demo.tool"), Set.of()));
+        module.put("META-INF/MANIFEST.MF", manifest(Map.of("Jenesis-Aliases",
+                "demo.tool=org.example/tool,demo.other=org.example/tool")));
+        module.put("demo/main/Main.class", TestJars.callRunMain("demo.main.Main", "tool.Tool"));
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.main", "mainClass", "demo.main.Main"),
+                Map.of(),
+                Map.of("demo-main.jar", TestJars.jar(module),
+                        "org.example%2Ftool%2F1.0.jar",
+                        TestJars.classJar("tool.Tool", TestJars.runner("tool.Tool", "from-alias"))));
+
+        assertThatThrownBy(() -> launch(bundle, "jenesis.test.alias.double"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("aliased as both");
+    }
+
+    @Test
     void runsAgentBundlePremain() throws Exception {
         // A bundle with no mainClass, used as a Java agent: runAgents invokes the bundled agent's premain,
         // passing the launcher's arguments (the -javaagent:foo.jar=... value) when the agent declares none.

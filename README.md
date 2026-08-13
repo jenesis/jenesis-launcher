@@ -206,6 +206,33 @@ Directives within a property are separated by `;` and targets within a directive
 module name or `ALL-UNNAMED`. The source must be one of the bundled modules (the `Controller` can only
 break encapsulation of the modules it defined); targets may be bundled, boot, or the unnamed module.
 
+Nothing is derived beyond these properties. In particular, an explicit module is never made to read the
+loader's unnamed module: a bundled module that uses a class-path type fails with an `IllegalAccessError`,
+exactly as it would under `java -p modulepath -cp classpath`. The dependency is instead given a module name
+of its own (see below), so a `requires` can name it.
+
+### Naming a module for a jar that has none
+
+A Jenesis `@jenesis.alias` gives a module name to a dependency that declares none - no `module-info`, not
+even an `Automatic-Module-Name` - so that a module can `requires` it. A build makes the name real by
+renaming the jar, since an automatic module's name is derived from its file name; the module that declared
+the alias also records it in its own manifest:
+
+```
+Jenesis-Aliases: org.kohsuke.args4j=args4j/args4j,demo.tool=org.example/tool
+```
+
+`InMemoryModuleFinder` honours that header, because a bundle need not have kept the renamed file: an
+`org.example%2Ftool%2F1.0.jar` inside `modulepath/` derives an unusable name, or none at all. Each entry
+maps a module name onto a Maven `<groupId>/<artifactId>` prefix, which is matched against the coordinate
+encoded in a bundled jar's file name. Only a jar that carries no identity of its own is considered - an
+alias exists precisely for such a jar - so a declaration whose target has been renamed already, or is not on
+the module path, is simply dropped. Two names for one jar is an error: a jar can be found under one name
+only, and choosing would resolve a graph the build never validated.
+
+Because the aliased jar *is* the module the author named, nothing else needs redirecting: a qualified
+`opens p to <alias>` reaches the code that reflects, exactly as written.
+
 ### Emulating a signed jar
 
 A dependency that shipped as a *signed* jar loses its signer identity when exploded: its signature files
@@ -250,8 +277,9 @@ outer jar, so the launcher reads each one only when first needed - no nested-jar
   `META-INF/`) unconditionally - so a resource in a non-open package stays encapsulated, while everything
   a real `java -p ... -cp ...` launch would expose is found.
 * `InMemoryModuleFinder` builds a `ModuleDescriptor` per module (read from `module-info.class`, or derived
-  for automatic modules from `Automatic-Module-Name` / the original jar file name, with `META-INF/services`
-  providers scanned in), backed by an `ArchiveModuleReader` whose `find` returns each entry's `jar:`/`file:`
+  for automatic modules from `Automatic-Module-Name` / the original jar file name - or from a
+  [`Jenesis-Aliases`](#naming-a-module-for-a-jar-that-has-none) declaration when the jar has neither - with
+  `META-INF/services` providers scanned in), backed by an `ArchiveModuleReader` whose `find` returns each entry's `jar:`/`file:`
   URL - so `Class#getResourceAsStream` for a class in the custom layer's loader resolves through the JDK's
   standard handlers, with no custom URL scheme.
 
