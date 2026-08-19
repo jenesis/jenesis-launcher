@@ -1,5 +1,6 @@
 # Jenesis Launcher
 
+[![release](https://img.shields.io/github/v/release/raphw/jenesis-launcher?label=release)](https://github.com/raphw/jenesis-launcher/releases/latest)
 ![build](https://github.com/raphw/jenesis-launcher/actions/workflows/build.yml/badge.svg)
 
 > ### [Jenesis](https://jenesis.build) - a modern Java build tool
