@@ -10,8 +10,8 @@
 and run as its `Main-Class`, so `java -jar foo.jar` starts the application - while modular dependencies are
 resolved into a fresh `java.lang.ModuleLayer` and non-modular ones become the unnamed module of the same
 loader. Each dependency is exploded into its own subfolder of the outer jar, and class and resource bytes are
-read straight from the still-open jar on demand: nothing is merged into a flat jar, held in memory, or
-extracted to disk.
+read straight from the still-open jar on demand: nothing is merged into a flat jar or held in memory, and
+only native libraries are ever extracted to disk.
 
 📖 **The user documentation lives at [jenesis.build/launcher](https://jenesis.build/launcher/).** How a
 launch proceeds, the jar layout, bundled agents, module-access grants, troubleshooting, and the full
@@ -29,10 +29,13 @@ launcher=true
 ```
 
 ```bash
-java build/jenesis/Project.java stage    # produces the executable jar
+java build/jenesis/Project.java          # the jar lands under target/build/…/launcher/bundle/output/launcher/
 java -jar foo.jar [args...]              # run it
-java -javaagent:foo.jar=args -jar app.jar   # a bundle with no mainClass is an agent
+java -javaagent:foo.jar=args -jar app.jar   # a hand-assembled jar with no mainClass is an agent
 ```
+
+The build tool writes `mainClass`, `mainModule` and `classpath` into the jar's `application.properties`; the
+agent, module-access and signer keys the launcher also understands are for jars assembled by other means.
 
 ## Building it
 
