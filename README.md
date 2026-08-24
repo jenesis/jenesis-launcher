@@ -74,8 +74,9 @@ A change to how the graph is assembled should arrive with the test that pins the
 `.github/workflows/build.yml` runs on every push and pull request: it checks out the submodule, sets up a JDK,
 and runs `java build/jenesis/Project.java`, which builds and tests in one step.
 
-`.github/workflows/release.yml` fires on a push to `main` whose commit message starts with `[release]` -
-`[release 1.2.3]` for an exact version, `[release]` alone to bump the minor of the latest `v*` tag. It stages
+`.github/workflows/release.yml` is dispatched by hand from the Actions tab, so any commit is releasable: the
+optional `sha` input names the commit (default: the head it runs on) and the optional `tag` input names the tag
+(`v1.2.3` or `1.2.3`; left empty, the minor of the latest `v*` tag is bumped). It stages
 with sources and documentation, then hands the tree to JReleaser (`jreleaser.yml`), which signs, publishes to
 Maven Central and tags `v<version>`. `project.properties` carries the POM metadata.
 
