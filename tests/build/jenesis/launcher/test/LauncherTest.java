@@ -75,6 +75,40 @@ class LauncherTest {
     }
 
     @Test
+    void derivesAutomaticModuleVersionFromFileName() throws Exception {
+        Path bundle = directory.resolve("versioned-app.jar");
+        // A module path derives a version as well as a name, so a bundle must report the same identity.
+        byte[] module = TestJars.classJar("demo.widgets.Main", TestJars.moduleVersionMain("demo.widgets.Main"));
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "widgets", "mainClass", "demo.widgets.Main"),
+                Map.of(),
+                Map.of("widgets-1.2.jar", module));
+
+        String key = "jenesis.test.version";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("1.2");
+    }
+
+    @Test
+    void leavesAnUnparsableVersionOffAnAutomaticModule() throws Exception {
+        Path bundle = directory.resolve("unversioned-app.jar");
+        // The runtime drops a tail it cannot parse rather than carrying it, and so does the launcher.
+        byte[] module = TestJars.classJar("demo.widgets.Main", TestJars.moduleVersionMain("demo.widgets.Main"));
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "widgets", "mainClass", "demo.widgets.Main"),
+                Map.of(),
+                Map.of("widgets.jar", module));
+
+        String key = "jenesis.test.unversioned";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("none");
+    }
+
+    @Test
     void loadsClassPathResource() throws Exception {
         Path bundle = directory.resolve("resource-app.jar");
         Map<String, byte[]> entries = new LinkedHashMap<>();
