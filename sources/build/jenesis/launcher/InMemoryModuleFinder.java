@@ -165,6 +165,10 @@ final class InMemoryModuleFinder implements ModuleFinder {
     private static ModuleDescriptor automatic(Archive.Jar jar, Set<String> packages, String alias) {
         ModuleDescriptor.Builder builder = ModuleDescriptor.newAutomaticModule(
                 alias == null ? automaticName(jar) : alias);
+        String version = automaticVersion(jar);
+        if (version != null) {
+            builder.version(version);
+        }
         if (!packages.isEmpty()) {
             builder.packages(packages);
         }
@@ -215,6 +219,30 @@ final class InMemoryModuleFinder implements ModuleFinder {
             name = name.substring(0, name.length() - 1);
         }
         return name;
+    }
+
+    /**
+     * The version a module path derives for this dependency, which is the tail of its name behind the first
+     * dash followed by digits, and only when it parses as a {@link ModuleDescriptor.Version} - as
+     * {@code ModulePath.deriveModuleDescriptor} does, so a bundled automatic module reports the identity it
+     * would report on a real module path, in {@code Module::getDescriptor} and in stack traces alike. A name
+     * declared by {@code Automatic-Module-Name} does not suppress it: the manifest names the module, the file
+     * still versions it.
+     */
+    private static String automaticVersion(Archive.Jar jar) {
+        String name = jar.name();
+        name = name.endsWith(".jar") ? name.substring(0, name.length() - 4) : name;
+        Matcher version = DASH_VERSION.matcher(name);
+        if (!version.find()) {
+            return null;
+        }
+        String tail = name.substring(version.start() + 1);
+        try {
+            ModuleDescriptor.Version.parse(tail);
+        } catch (IllegalArgumentException _) {
+            return null;
+        }
+        return tail;
     }
 
     private static Set<String> packages(List<String> names) {

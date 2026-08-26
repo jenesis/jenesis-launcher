@@ -17,8 +17,32 @@ final class TestJars {
     private static final ClassDesc CD_Thread = ClassDesc.of("java.lang.Thread");
     private static final ClassDesc CD_ClassLoader = ClassDesc.of("java.lang.ClassLoader");
     private static final ClassDesc CD_InputStream = ClassDesc.of("java.io.InputStream");
+    private static final ClassDesc CD_Module = ClassDesc.of("java.lang.Module");
+    private static final ClassDesc CD_ModuleDescriptor = ClassDesc.of("java.lang.module.ModuleDescriptor");
+    private static final ClassDesc CD_Optional = ClassDesc.of("java.util.Optional");
 
     private TestJars() {
+    }
+
+    /**
+     * A class whose {@code main} runs {@code System.setProperty(args[0], version)}, where {@code version} is
+     * the raw version of its own module, or {@code none} when the module carries none.
+     */
+    static byte[] moduleVersionMain(String binaryName) {
+        return main(binaryName, code -> code
+                .aload(0).iconst_0().aaload()
+                .ldc(ClassDesc.of(binaryName))
+                .invokevirtual(ConstantDescs.CD_Class, "getModule", MethodTypeDesc.of(CD_Module))
+                .invokevirtual(CD_Module, "getDescriptor", MethodTypeDesc.of(CD_ModuleDescriptor))
+                .invokevirtual(CD_ModuleDescriptor, "rawVersion", MethodTypeDesc.of(CD_Optional))
+                .ldc("none")
+                .invokevirtual(CD_Optional, "orElse",
+                        MethodTypeDesc.of(ConstantDescs.CD_Object, ConstantDescs.CD_Object))
+                .checkcast(ConstantDescs.CD_String)
+                .invokestatic(CD_System, "setProperty",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String, ConstantDescs.CD_String))
+                .pop()
+                .return_());
     }
 
     /** A class whose {@code main} runs {@code System.setProperty(args[0], args[1])}. */
