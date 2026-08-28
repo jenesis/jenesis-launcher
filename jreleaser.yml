@@ -4,7 +4,7 @@ project:
   authors: [Rafael Winterhalter]
   license: Apache-2.0
   links:
-    homepage: https://github.com/raphw/jenesis-launcher
+    homepage: https://github.com/jenesis/jenesis-launcher
   languages:
     java:
       groupId: build.jenesis
@@ -19,7 +19,7 @@ signing:
 
 release:
   github:
-    owner: raphw
+    owner: jenesis
     name: jenesis-launcher
     branch: main
     branchPush: main

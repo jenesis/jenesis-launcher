@@ -1,7 +1,7 @@
 # Jenesis Launcher
 
-[![release](https://img.shields.io/github/v/release/raphw/jenesis-launcher?label=release)](https://github.com/raphw/jenesis-launcher/releases/latest)
-![build](https://github.com/raphw/jenesis-launcher/actions/workflows/build.yml/badge.svg)
+[![release](https://img.shields.io/github/v/release/jenesis/jenesis-launcher?label=release)](https://github.com/jenesis/jenesis-launcher/releases/latest)
+![build](https://github.com/jenesis/jenesis-launcher/actions/workflows/build.yml/badge.svg)
 
 > ### [Jenesis](https://jenesis.build) - a modern Java build tool
 > _Java-native config, plugin-free, with `module-info.java` treated as a feature, not an afterthought._

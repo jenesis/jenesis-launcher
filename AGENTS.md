@@ -5,7 +5,7 @@ rebuilds the application's module graph in process instead of merging everything
 tool consumes it as `build.jenesis:build.jenesis.launcher`; nobody depends on it directly. `README.md`
 covers what it does, the tests and releasing. The user documentation is
 [jenesis.build/launcher](https://jenesis.build/launcher/)
-([raphw/jenesis-documentation](https://github.com/raphw/jenesis-documentation)).
+([jenesis/jenesis-documentation](https://github.com/jenesis/jenesis-documentation)).
 
 ## Build & test
 
@@ -25,7 +25,7 @@ covers what it does, the tests and releasing. The user documentation is
   (an automatic module reads the class path, a strict module does not; a module's package shadows the class
   path) are reproduced, not improved on. A behaviour the JDK does not have is not added here.
 - The jar layout and the `application.properties` descriptor are the contract with the build tool's
-  `Launcher` step in raphw/jenesis and with the documentation: `classpath/<jar>/…` and `modulepath/<jar>/…`
+  `Launcher` step in jenesis/jenesis and with the documentation: `classpath/<jar>/…` and `modulepath/<jar>/…`
   subfolders, the descriptor keys (`mainClass`, `mainModule`, `classpath`, `agentClass`, `addExports`,
   `addOpens`, `addReads`, `signature.<dep>`) and the manifest attributes. A change to any of them is made
   together with the build tool and the documentation.
