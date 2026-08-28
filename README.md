@@ -82,4 +82,8 @@ Maven Central and tags `v<version>`. `project.properties` carries the POM metada
 
 ## License
 
-Apache License 2.0. Copyright Rafael Winterhalter.
+Apache License 2.0 - see [LICENSE](LICENSE). Copyright Rafael Winterhalter.
+
+The license covers the launcher itself, and travels with the code: a jar that shades the launcher in
+redistributes Apache-licensed bytes under these terms. It does not extend to the application that jar
+starts, or to the dependencies the launcher resolves, which keep the licenses their own authors chose.
