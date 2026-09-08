@@ -29,7 +29,7 @@ launcher=true
 ```
 
 ```bash
-java build/jenesis/Project.java          # the jar lands under target/build/…/launcher/bundle/output/launcher/
+java build/jenesis/Make.java          # the jar lands under target/build/…/launcher/bundle/output/launcher/
 java -jar foo.jar [args...]              # run it
 java -javaagent:foo.jar=args -jar app.jar   # a hand-assembled jar with no mainClass is an agent
 ```
@@ -44,11 +44,11 @@ own Java source - no wrapper, no plugins:
 
 ```bash
 git submodule update --init --depth 1     # the pinned Jenesis build tool
-java build/jenesis/Project.java           # compile, package, run the tests
-java build/jenesis/Project.java stage     # stage the published artifact under target/stage
+java build/jenesis/Make.java           # compile, package, run the tests
+java build/jenesis/Make.java stage     # stage the published artifact under target/stage
 ```
 
-The build tool is tracked as a shallow submodule under `.jenesis/upstream`, pinned to the commit this project
+The build tool is tracked as a shallow submodule under `build/.upstream`, pinned to the commit this project
 builds against, so a fresh clone plus that one command is the whole setup.
 
 ## Tests
@@ -72,7 +72,7 @@ A change to how the graph is assembled should arrive with the test that pins the
 ## Continuous integration and releases
 
 `.github/workflows/build.yml` runs on every push and pull request: it checks out the submodule, sets up a JDK,
-and runs `java build/jenesis/Project.java`, which builds and tests in one step.
+and runs `java build/jenesis/Make.java`, which builds and tests in one step.
 
 `.github/workflows/release.yml` is dispatched by hand from the Actions tab, so any commit is releasable: the
 optional `sha` input names the commit (default: the head it runs on) and the optional `tag` input names the tag
