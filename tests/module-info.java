@@ -14,6 +14,9 @@
  * @jenesis.pin org.junit.platform.launcher 1.11.4 SHA-256/d7430bd029e7fcced53ee445e4d2d1a8a1e043ea4c4df43b6335a857f79761ae
  * @jenesis.pin org.junit.platform.reporting 1.11.3 SHA-256/b8e19dbebcae7d1ff30b9d767047fbf3694027c33dfa423b371693b7f6679ed1
  * @jenesis.pin org.opentest4j 1.3.0 SHA-256/48e2df636cab6563ced64dcdff8abb2355627cb236ef0bf37598682ddf742f1b
+ * @jenesis.signature OpenPGP/BE685132AFD2740D9095F9040CC0B712FEE75827 org.assertj/*
+ * @jenesis.signature OpenPGP/B4AC8CDC141AF0AE468D16921DA784CCB5C46DD5 net.bytebuddy/*
+ * @jenesis.signature OpenPGP/FF6E2C001948C5F2F38B0CC385911F425EC61B51 org.apiguardian/* org.junit.jupiter/* org.junit.platform/* org.opentest4j/*
  */
 open module build.jenesis.launcher.test {
 
