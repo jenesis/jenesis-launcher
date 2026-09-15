@@ -82,7 +82,40 @@ public final class Launcher {
      * this mechanism actually goes on.</p>
      */
     public static <S> ServiceLoader<S> load(String name, Class<S> service) {
-        ModuleLayer layer = layer(WALKER.getCallerClass(), name);
+        return load(WALKER.getCallerClass(), name, service);
+    }
+
+    /**
+     * The one provider of {@code service} in the caller's {@code name} layer, instantiated. A layer is
+     * reached through the implementation it provides, so finding none or finding several is a mistake in
+     * what the layer holds rather than a choice to make here: {@link #load} is what offers the choice.
+     *
+     * @throws IllegalStateException if the layer provides no implementation, or more than one.
+     */
+    public static <S> S instance(String name, Class<S> service) {
+        List<ServiceLoader.Provider<S>> providers = load(WALKER.getCallerClass(), name, service)
+                .stream()
+                .toList();
+        if (providers.isEmpty()) {
+            throw new IllegalStateException("Layer " + name + " provides no " + service.getName()
+                    + " - a module in the layer declares it with 'provides " + service.getSimpleName()
+                    + " with ...', or names it in META-INF/services");
+        }
+        if (providers.size() > 1) {
+            throw new IllegalStateException("Layer " + name + " provides " + providers.size() + " of "
+                    + service.getName() + ", including " + providers.getFirst().type().getName() + " and "
+                    + providers.get(1).type().getName()
+                    + " - keep one, or ask for all of them with Launcher.load");
+        }
+        return providers.getFirst().get();
+    }
+
+    /**
+     * Resolves the layer for an explicit caller, which is what both public forms need: reading the caller
+     * off the stack a second time would find this class rather than whoever called it.
+     */
+    private static <S> ServiceLoader<S> load(Class<?> caller, String name, Class<S> service) {
+        ModuleLayer layer = layer(caller, name);
         Launcher.class.getModule().addUses(service);
         return ServiceLoader.load(layer, service);
     }

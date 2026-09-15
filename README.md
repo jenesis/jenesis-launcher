@@ -50,7 +50,7 @@ module my.library {
     requires my.library.spi;          // the API module, shared with the layer
 }
 
-Renderer r = Launcher.load("render", Renderer.class).findFirst().orElseThrow();
+Renderer r = Launcher.instance("render", Renderer.class);
 ```
 
 The layer's dependencies are bundled among the application's in the same `jars/` store, and
@@ -69,9 +69,11 @@ relocated and nothing is unpacked.
 
 The layer is a child of the caller's, so every module it does not itself hold resolves from the caller - the
 API module above all, which is therefore the *same* class on both sides, and the call across the boundary is
-an ordinary interface call. The calling module needs no `uses` clause; `load` adds the service dependence to
+an ordinary interface call. The calling module needs no `uses` clause; the call adds the service dependence to
 this module, which `ServiceLoader` otherwise refuses because it checks `uses` against the caller and offers
-no overload that takes one. Which module calls decides whose layer a name means, so two modules may each
+no overload that takes one. `instance` returns the one implementation the layer provides and refuses none
+or several, which is the mistake it would otherwise hide; `load` hands over the `ServiceLoader` for the
+cases that genuinely expect more than one. Which module calls decides whose layer a name means, so two modules may each
 declare `render` without colliding.
 
 Outside a bundle - a deployment that unpacked its dependencies - `jenesis.layer.modulepath.<name>`

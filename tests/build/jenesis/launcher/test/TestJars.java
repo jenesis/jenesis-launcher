@@ -513,6 +513,28 @@ final class TestJars {
      * {@code layer} into {@code System.setProperty(args[0], …)} - the whole bridge in one call, with no
      * {@code uses} clause in the module that runs it.
      */
+    /**
+     * A main that stores the class name of the single provider {@code Launcher.instance} returns into
+     * {@code System.setProperty(args[0], …)}, so a layer with none or several fails the launch instead.
+     */
+    static byte[] instanceMain(String binaryName, String layer, String service) {
+        ClassDesc cdLauncher = ClassDesc.of("build.jenesis.launcher.Launcher");
+        ClassDesc cdClass = ClassDesc.of("java.lang.Class");
+        return main(binaryName, code -> code
+                .aload(0).iconst_0().aaload()
+                .loadConstant(layer)
+                .loadConstant(ClassDesc.of(service))
+                .invokestatic(cdLauncher, "instance",
+                        MethodTypeDesc.of(ConstantDescs.CD_Object, ConstantDescs.CD_String, cdClass))
+                .invokevirtual(ConstantDescs.CD_Object, "getClass", MethodTypeDesc.of(cdClass))
+                .invokevirtual(cdClass, "getName", MethodTypeDesc.of(ConstantDescs.CD_String))
+                .invokestatic(CD_System, "setProperty",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String,
+                                ConstantDescs.CD_String))
+                .pop()
+                .return_());
+    }
+
     static byte[] loadServiceMain(String binaryName, String layer, String service) {
         ClassDesc cdLauncher = ClassDesc.of("build.jenesis.launcher.Launcher");
         ClassDesc cdServiceLoader = ClassDesc.of("java.util.ServiceLoader");

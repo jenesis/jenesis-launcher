@@ -1294,6 +1294,66 @@ class LauncherTest {
         }
     }
 
+    private Path instanceBundle(String jar, Map<String, Map<String, byte[]>> layer) throws IOException {
+        Path bundle = directory.resolve(jar);
+        Map<String, byte[]> modules = new LinkedHashMap<>();
+        modules.put("spi.jar", TestJars.modularJar("demo.spi",
+                Map.of("demo/spi/Contract.class", TestJars.serviceInterface("demo.spi.Contract")),
+                Set.of(), Set.of("demo.spi")));
+        modules.put("host.jar", TestJars.modularJar("demo.host",
+                Map.of("demo/host/Main.class",
+                        TestJars.instanceMain("demo.host.Main", "render", "demo.spi.Contract")),
+                Set.of("demo.spi", "build.jenesis.launcher"), Set.of("demo.host")));
+        Map<String, String> application = new LinkedHashMap<>(Map.of(
+                "mainModule", "demo.host", "mainClass", "demo.host.Main"));
+        layer.forEach((name, jars) ->
+                application.put("layer.modulepath." + name, String.join(",", jars.keySet())));
+        TestJars.writeBundle(bundle, application, Map.of(), modules, layer);
+        return bundle;
+    }
+
+    @Test
+    void returnsTheSingleProviderOfALayer() throws Exception {
+        Path bundle = instanceBundle("instance.jar",
+                Map.of("render", Map.of("provider.jar", providerJar())));
+
+        String key = "jenesis.test.layer.instance";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key))
+                .as("a layer is reached through the one implementation it provides")
+                .isEqualTo("demo.provider.Impl");
+    }
+
+    @Test
+    void refusesALayerThatProvidesNoImplementation() throws Exception {
+        byte[] empty = TestJars.modularJar("demo.provider",
+                Map.of("demo/provider/Unrelated.class", TestJars.runner("demo.provider.Unrelated", "x")),
+                Set.of("demo.spi"), Set.of("demo.provider"));
+        Path bundle = instanceBundle("instance-none.jar",
+                Map.of("render", Map.of("provider.jar", empty)));
+
+        assertThatThrownBy(() -> launch(bundle, "jenesis.test.layer.none"))
+                .hasStackTraceContaining("Layer render provides no demo.spi.Contract")
+                .hasStackTraceContaining("META-INF/services");
+    }
+
+    @Test
+    void refusesALayerThatProvidesMoreThanOneImplementation() throws Exception {
+        byte[] second = TestJars.jar(Map.of(
+                "module-info.class", TestJars.moduleInfo("demo.second",
+                        Set.of("demo.spi"), Set.of(), "demo.spi.Contract", "demo.second.Impl"),
+                "demo/second/Impl.class",
+                        TestJars.serviceProvider("demo.second.Impl", "demo.spi.Contract")));
+        Path bundle = instanceBundle("instance-many.jar",
+                Map.of("render", Map.of("provider.jar", providerJar(), "second.jar", second)));
+
+        assertThatThrownBy(() -> launch(bundle, "jenesis.test.layer.many"))
+                .hasStackTraceContaining("Layer render provides 2 of demo.spi.Contract")
+                .hasStackTraceContaining("Launcher.load");
+    }
+
     @Test
     void identifiesALayerByItsNameAmongSeveral() throws Exception {
         Path bundle = directory.resolve("scoped.jar");
