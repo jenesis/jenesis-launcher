@@ -35,8 +35,7 @@ java -javaagent:foo.jar=args -jar app.jar   # a hand-assembled jar with no mainC
 ```
 
 The build tool writes `mainClass`, `mainModule` and `classpath` into the jar's `application.properties`; the
-agent, module-access, signer and layer keys the launcher also understands are for jars assembled by other
-means.
+agent, module-access and signer keys the launcher also understands are for jars assembled by other means.
 
 ## Module layers
 
@@ -52,10 +51,10 @@ module my.library {
 Renderer r = Launcher.load("render", Renderer.class).findFirst().orElseThrow();
 ```
 
-The layer's dependencies are bundled under `modulepath/` like any others and named by
-`layer.render=<jar>,<jar>` in `application.properties`, which also withholds them from the application's own
-module path. They are read from the still-open jar by a second `InMemoryClassLoader`: nothing is relocated
-and nothing is unpacked.
+The layer's dependencies are bundled under `layers/render/<jar>/…`, exploded exactly as the application's
+own are under `modulepath/`. The separate prefix is what keeps them off the application's module path, so
+nothing has to withhold them and no descriptor key declares them. They are read from the still-open jar by a
+second `InMemoryClassLoader`: nothing is relocated and nothing is unpacked.
 
 The layer is a child of the caller's, so every module it does not itself hold resolves from the caller - the
 API module above all, which is therefore the *same* class on both sides, and the call across the boundary is

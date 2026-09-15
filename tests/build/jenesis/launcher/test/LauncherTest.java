@@ -1067,13 +1067,12 @@ class LauncherTest {
     @Test
     void loadsAServiceFromABundledLayerWithoutAUsesClause() throws Exception {
         Path bundle = directory.resolve("layered.jar");
-        Map<String, byte[]> modules = new LinkedHashMap<>(layerFixture());
-        modules.put("provider.jar", providerJar());
+        byte[] provider = providerJar();
         TestJars.writeBundle(bundle,
-                Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main",
-                        "layer.render", "provider.jar"),
+                Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main"),
                 Map.of(),
-                modules);
+                layerFixture(),
+                Map.of("render", Map.of("provider.jar", provider)));
 
         String key = "jenesis.test.layer.load";
         System.clearProperty(key);
@@ -1087,13 +1086,12 @@ class LauncherTest {
     @Test
     void withholdsALayersModulesFromTheApplicationModulePath() throws Exception {
         Path bundle = directory.resolve("withheld.jar");
-        Map<String, byte[]> modules = new LinkedHashMap<>(layerFixture());
-        modules.put("provider.jar", providerJar());
+        byte[] provider = providerJar();
         TestJars.writeBundle(bundle,
-                Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main",
-                        "layer.render", "provider.jar"),
+                Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main"),
                 Map.of(),
-                modules);
+                layerFixture(),
+                Map.of("render", Map.of("provider.jar", provider)));
 
         String key = "jenesis.test.layer.withheld";
         System.clearProperty(key);
@@ -1107,20 +1105,19 @@ class LauncherTest {
     @Test
     void refusesALayerHoldingTheModuleThatDeclaresAServiceItProvides() throws Exception {
         Path bundle = directory.resolve("swallowed.jar");
-        Map<String, byte[]> modules = new LinkedHashMap<>(layerFixture());
         // A provider that bundled the contract instead of depending on it: the layer then carries its own
         // demo.spi.Contract, and the host would look the service up against a different class of that name.
-        modules.put("provider.jar", TestJars.jar(Map.of(
+        byte[] provider = TestJars.jar(Map.of(
                 "module-info.class", TestJars.moduleInfo("demo.provider",
                         Set.of(), Set.of("demo.spi"), "demo.spi.Contract", "demo.provider.Impl"),
                 "demo/spi/Contract.class", TestJars.serviceInterface("demo.spi.Contract"),
                 "demo/provider/Impl.class",
-                        TestJars.serviceProvider("demo.provider.Impl", "demo.spi.Contract"))));
+                        TestJars.serviceProvider("demo.provider.Impl", "demo.spi.Contract")));
         TestJars.writeBundle(bundle,
-                Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main",
-                        "layer.render", "provider.jar"),
+                Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main"),
                 Map.of(),
-                modules);
+                layerFixture(),
+                Map.of("render", Map.of("provider.jar", provider)));
 
         String key = "jenesis.test.layer.swallowed";
         System.clearProperty(key);

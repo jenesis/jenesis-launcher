@@ -572,10 +572,26 @@ final class TestJars {
                             Map<String, String> application,
                             Map<String, byte[]> classpath,
                             Map<String, byte[]> modulepath) throws IOException {
+        writeBundle(target, application, classpath, modulepath, Map.of());
+    }
+
+    /**
+     * As {@link #writeBundle(Path, Map, Map, Map)}, with {@code layers} mapping a layer name to the
+     * dependencies it holds, exploded under {@code layers/<name>/} just as the application's own are under
+     * {@code modulepath/}.
+     */
+    static void writeBundle(Path target,
+                            Map<String, String> application,
+                            Map<String, byte[]> classpath,
+                            Map<String, byte[]> modulepath,
+                            Map<String, Map<String, byte[]>> layers) throws IOException {
         Map<String, byte[]> entries = new LinkedHashMap<>();
         entries.put("application.properties", applicationProperties(application));
         explode(entries, "classpath/", classpath);
         explode(entries, "modulepath/", modulepath);
+        for (Map.Entry<String, Map<String, byte[]>> layer : layers.entrySet()) {
+            explode(entries, "layers/" + layer.getKey() + "/", layer.getValue());
+        }
         Files.write(target, jar(entries));
     }
 

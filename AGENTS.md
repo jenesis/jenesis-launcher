@@ -27,11 +27,13 @@ covers what it does, the tests and releasing. The user documentation is
 - The jar layout and the `application.properties` descriptor are the contract with the build tool's
   `Launcher` step in jenesis/jenesis and with the documentation: `classpath/<jar>/…` and `modulepath/<jar>/…`
   subfolders, the descriptor keys (`mainClass`, `mainModule`, `classpath`, `agentClass`, `addExports`,
-  `addOpens`, `addReads`, `signature.<dep>`, `layer.<name>`) and the manifest attributes. A change to any of
-  them is made together with the build tool and the documentation.
-- A module layer is the same graph again under a name of its own. `layer.<name>` lists the dependencies it
-  holds; they are bundled under `modulepath/` like any other and are withheld from the application's own
-  module path, because two versions of one module are the point and one configuration cannot hold both.
+  `addOpens`, `addReads`, `signature.<dep>`) and the manifest attributes, plus `layers/<name>/<jar>/…`.
+  A change to any of them is made together with the build tool and the documentation.
+- A module layer is the same graph again under a name of its own, under a prefix of its own:
+  `layers/<name>/<jar>/…`, its dependencies exploded exactly as the application's are. The prefix is what
+  keeps a layer's modules off the application's module path - two versions of one module are the point of a
+  layer, and one configuration cannot hold both - so nothing has to withhold them and no descriptor key
+  declares them; they are discovered by scanning, like the class path and the module path.
   `Launcher.layer`/`Launcher.load` define it on demand, as a child of the caller's layer, so every module
   the layer does not itself hold - the API module it shares with the caller above all - resolves from the
   caller and is the same class on both sides. Which module calls decides whose layer a name means, so two

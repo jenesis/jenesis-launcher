@@ -25,6 +25,7 @@ final class Archive implements Closeable {
     static final String APPLICATION = "application.properties";
     static final String CLASS_PATH = "classpath/";
     static final String MODULE_PATH = "modulepath/";
+    static final String LAYERS = "layers/";
 
     /** Reads bytes and openable URLs for entries of the outer jar or directory, on demand. */
     interface Source extends Closeable {
@@ -132,6 +133,7 @@ final class Archive implements Closeable {
     private final Properties application = new Properties();
     private final List<Jar> classpath = new ArrayList<>();
     private final List<Jar> modulepath = new ArrayList<>();
+    private final Map<String, List<Jar>> layers = new LinkedHashMap<>();
     private Source source;
 
     static Archive load(Path location) throws IOException {
@@ -146,6 +148,7 @@ final class Archive implements Closeable {
         // does not list. The module path is a set, so its name order is only a deterministic tie-break.
         order(archive.classpath, archive.application.getProperty("classpath"));
         archive.modulepath.sort(Comparator.comparing(Jar::name));
+        archive.layers.values().forEach(jars -> jars.sort(Comparator.comparing(Jar::name)));
         return archive;
     }
 
@@ -183,6 +186,16 @@ final class Archive implements Closeable {
     }
 
     /**
+     * The bundled module layers, each a layer name mapped to the dependencies it holds. A layer lives under
+     * a prefix of its own rather than among the application's, which is what keeps its modules off the
+     * application's module path without anything having to withhold them - two versions of one module are
+     * the point of a layer, and one configuration cannot hold both.
+     */
+    Map<String, List<Jar>> layers() {
+        return layers;
+    }
+
+    /**
      * Closes the underlying jar (or directory) handle. The loader keeps it open to read classes and
      * resources on demand for as long as the application runs, so this is for the paths that load an archive
      * but build no loader from it, and for embedders that discard a loader; afterwards the archive's jars
@@ -200,12 +213,27 @@ final class Archive implements Closeable {
         }
         Map<String, List<String>> classpathGroups = new LinkedHashMap<>();
         Map<String, List<String>> modulepathGroups = new LinkedHashMap<>();
+        Map<String, Map<String, List<String>>> layerGroups = new LinkedHashMap<>();
         for (String entry : source.names()) {
             group(entry, CLASS_PATH, classpathGroups);
             group(entry, MODULE_PATH, modulepathGroups);
+            if (entry.startsWith(LAYERS)) {
+                int slash = entry.indexOf('/', LAYERS.length());
+                if (slash > LAYERS.length()) {
+                    group(entry.substring(slash + 1),
+                            "",
+                            layerGroups.computeIfAbsent(entry.substring(LAYERS.length(), slash),
+                                    _ -> new LinkedHashMap<>()));
+                }
+            }
         }
         collect(classpathGroups, CLASS_PATH, source, classpath);
         collect(modulepathGroups, MODULE_PATH, source, modulepath);
+        for (Map.Entry<String, Map<String, List<String>>> layer : layerGroups.entrySet()) {
+            List<Jar> jars = new ArrayList<>();
+            collect(layer.getValue(), LAYERS + layer.getKey() + "/", source, jars);
+            layers.put(layer.getKey(), jars);
+        }
     }
 
     private static void group(String entry, String prefix, Map<String, List<String>> groups) {
@@ -415,7 +443,7 @@ final class Archive implements Closeable {
             if (Files.isRegularFile(root.resolve(APPLICATION))) {
                 names.add(APPLICATION);
             }
-            for (String prefix : List.of(CLASS_PATH, MODULE_PATH)) {
+            for (String prefix : List.of(CLASS_PATH, MODULE_PATH, LAYERS)) {
                 Path base = root.resolve(prefix);
                 if (Files.isDirectory(base)) {
                     try (Stream<Path> files = Files.walk(base)) {
