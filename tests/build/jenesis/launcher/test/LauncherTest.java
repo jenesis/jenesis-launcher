@@ -1069,10 +1069,11 @@ class LauncherTest {
         Path bundle = directory.resolve("layered.jar");
         byte[] provider = providerJar();
         TestJars.writeBundle(bundle,
-                Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main"),
+                Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main",
+                        "layer.demo.host.render", "provider.jar"),
                 Map.of(),
                 layerFixture(),
-                Map.of("demo.host/render", Map.of("provider.jar", provider)));
+                Map.of("demo.host.render", Map.of("provider.jar", provider)));
 
         String key = "jenesis.test.layer.load";
         System.clearProperty(key);
@@ -1088,10 +1089,11 @@ class LauncherTest {
         Path bundle = directory.resolve("withheld.jar");
         byte[] provider = providerJar();
         TestJars.writeBundle(bundle,
-                Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main"),
+                Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main",
+                        "layer.demo.host.render", "provider.jar"),
                 Map.of(),
                 layerFixture(),
-                Map.of("demo.host/render", Map.of("provider.jar", provider)));
+                Map.of("demo.host.render", Map.of("provider.jar", provider)));
 
         String key = "jenesis.test.layer.withheld";
         System.clearProperty(key);
@@ -1114,10 +1116,11 @@ class LauncherTest {
                 "demo/provider/Impl.class",
                         TestJars.serviceProvider("demo.provider.Impl", "demo.spi.Contract")));
         TestJars.writeBundle(bundle,
-                Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main"),
+                Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main",
+                        "layer.demo.host.render", "provider.jar"),
                 Map.of(),
                 layerFixture(),
-                Map.of("demo.host/render", Map.of("provider.jar", provider)));
+                Map.of("demo.host.render", Map.of("provider.jar", provider)));
 
         String key = "jenesis.test.layer.swallowed";
         System.clearProperty(key);
@@ -1167,11 +1170,13 @@ class LauncherTest {
                 "demo/intruder/Impl.class",
                         TestJars.serviceProvider("demo.intruder.Impl", "demo.spi.Contract")));
         TestJars.writeBundle(bundle,
-                Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main"),
+                Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main",
+                        "layer.demo.host.render", "provider.jar",
+                        "layer.demo.other.render", "intruder.jar"),
                 Map.of(),
                 modules,
-                Map.of("demo.host/render", Map.of("provider.jar", mine),
-                        "demo.other/render", Map.of("intruder.jar", theirs)));
+                Map.of("demo.host.render", Map.of("provider.jar", mine),
+                        "demo.other.render", Map.of("intruder.jar", theirs)));
 
         String key = "jenesis.test.layer.scoped";
         System.clearProperty(key);

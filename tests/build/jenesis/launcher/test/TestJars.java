@@ -576,9 +576,9 @@ final class TestJars {
     }
 
     /**
-     * As {@link #writeBundle(Path, Map, Map, Map)}, with {@code layers} mapping a layer name to the
-     * dependencies it holds, exploded under {@code layers/<name>/} just as the application's own are under
-     * {@code modulepath/}.
+     * As {@link #writeBundle(Path, Map, Map, Map)}, with {@code layers} mapping a {@code <module>.<name>}
+     * key to the dependencies it holds. They are exploded among the application's under
+     * {@code modulepath/}; the caller declares the membership with a {@code layer.<module>.<name>} entry.
      */
     static void writeBundle(Path target,
                             Map<String, String> application,
@@ -590,7 +590,7 @@ final class TestJars {
         explode(entries, "classpath/", classpath);
         explode(entries, "modulepath/", modulepath);
         for (Map.Entry<String, Map<String, byte[]>> layer : layers.entrySet()) {
-            explode(entries, "layers/" + layer.getKey() + "/", layer.getValue());
+            explode(entries, "modulepath/", layer.getValue());
         }
         Files.write(target, jar(entries));
     }

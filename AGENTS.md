@@ -27,14 +27,17 @@ covers what it does, the tests and releasing. The user documentation is
 - The jar layout and the `application.properties` descriptor are the contract with the build tool's
   `Launcher` step in jenesis/jenesis and with the documentation: `classpath/<jar>/…` and `modulepath/<jar>/…`
   subfolders, the descriptor keys (`mainClass`, `mainModule`, `classpath`, `agentClass`, `addExports`,
-  `addOpens`, `addReads`, `signature.<dep>`) and the manifest attributes, plus
-  `layers/<declaring module>/<name>/<jar>/…`.
+  `addOpens`, `addReads`, `signature.<dep>`, `layer.<declaring module>.<name>`) and the manifest
+  attributes.
   A change to any of them is made together with the build tool and the documentation.
-- A module layer is the same graph again under a name of its own, under a prefix of its own:
-  `layers/<declaring module>/<name>/<jar>/…`, its dependencies exploded exactly as the application's are.
-  The declaring module is part of the key because a layer may itself hold a module that declares one, so
-  nesting is unbounded and two unrelated libraries may each call theirs the same thing; the runtime derives
-  the same key from the calling module, so nothing extra travels. The prefix is what
+- A module layer is the same graph again under a name of its own. Its dependencies are bundled among the
+  application's under `modulepath/`, so a jar a layer and the application both need is stored once and
+  simply loaded twice, and two versions stand side by side because a bundled dependency is named after the
+  jar it came from. `layer.<declaring module>.<name>` names what each holds, and the application's own
+  module path is everything no layer claims. The declaring module is part of the key because a layer may
+  itself hold a module that declares one, so nesting is unbounded and two unrelated libraries may each call
+  theirs the same thing; the runtime builds the same key from the calling module, so nothing extra
+  travels. The prefix is what
   keeps a layer's modules off the application's module path - two versions of one module are the point of a
   layer, and one configuration cannot hold both - so nothing has to withhold them and no descriptor key
   declares them; they are discovered by scanning, like the class path and the module path.

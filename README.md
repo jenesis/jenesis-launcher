@@ -51,10 +51,12 @@ module my.library {
 Renderer r = Launcher.load("render", Renderer.class).findFirst().orElseThrow();
 ```
 
-The layer's dependencies are bundled under `layers/my.library/render/<jar>/…`, exploded exactly as the
-application's own are under `modulepath/`. The declaring module is part of the path because a layer may
-itself hold a module that declares one - nesting is unbounded - and the runtime derives the same key from
-the calling module, so nothing extra has to travel. The separate prefix is what keeps them off the application's module path, so
+The layer's dependencies are bundled among the application's under `modulepath/`, and
+`layer.my.library.render=<jar>,<jar>` in `application.properties` says which are its. So a jar the layer and
+the application both need is stored **once** and simply loaded twice, and two versions stand side by side
+because each is named after the jar it came from. The declaring module is part of the key because a layer
+may itself hold a module that declares one - nesting is unbounded - and the runtime builds the same key
+from the calling module, so nothing extra has to travel. The separate prefix is what keeps them off the application's module path, so
 nothing has to withhold them and no descriptor key declares them. They are read from the still-open jar by a
 second `InMemoryClassLoader`: nothing is relocated and nothing is unpacked.
 

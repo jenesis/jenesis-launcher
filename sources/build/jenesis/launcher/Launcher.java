@@ -84,7 +84,7 @@ public final class Launcher {
             Archive archive = bundle(caller);
             List<Archive.Jar> bundled = archive == null
                     ? List.of()
-                    : archive.layers().getOrDefault(module.getName() + "/" + name, List.of());
+                    : archive.layers().getOrDefault(module.getName() + "." + name, List.of());
             java.lang.module.Configuration configuration;
             ClassLoader loader;
             if (bundled.isEmpty()) {
@@ -130,6 +130,21 @@ public final class Launcher {
                 }
             }
         }
+    }
+
+    /**
+     * The module path of the application itself: everything bundled that no layer claims. A layer's modules
+     * are bundled among the application's, so that a jar both need is stored once and simply loaded twice -
+     * which means they have to be withheld here, since two versions of one module are the point of a layer
+     * and one configuration cannot hold both.
+     */
+    private static List<Archive.Jar> application(Archive archive) {
+        if (archive.layers().isEmpty()) {
+            return archive.modulepath();
+        }
+        Set<Archive.Jar> layered = Collections.newSetFromMap(new IdentityHashMap<>());
+        archive.layers().values().forEach(layered::addAll);
+        return archive.modulepath().stream().filter(jar -> !layered.contains(jar)).toList();
     }
 
     private static Path[] paths(Module module, String name) {
@@ -260,8 +275,9 @@ public final class Launcher {
         InMemoryClassLoader loader;
         ModuleLayer.Controller controller = null;
         ModuleLayer layer = null;
-        if (!archive.modulepath().isEmpty()) {
-            InMemoryModuleFinder finder = new InMemoryModuleFinder(archive.modulepath());
+        List<Archive.Jar> modulepath = application(archive);
+        if (!modulepath.isEmpty()) {
+            InMemoryModuleFinder finder = new InMemoryModuleFinder(modulepath);
             // Reproduce `java -m <mainModule>`: root the main module and let resolution pull in its
             // `requires` closure (resolveAndBind also binds services). Unless this is a self-contained module
             // graph - a main module over a pure named-module path - every module is rooted instead, the

@@ -25,7 +25,8 @@ final class Archive implements Closeable {
     static final String APPLICATION = "application.properties";
     static final String CLASS_PATH = "classpath/";
     static final String MODULE_PATH = "modulepath/";
-    static final String LAYERS = "layers/";
+    /** {@code application.properties} key prefix naming the dependencies a layer holds, by file name. */
+    static final String LAYERS = "layer.";
 
     /** Reads bytes and openable URLs for entries of the outer jar or directory, on demand. */
     interface Source extends Closeable {
@@ -148,7 +149,7 @@ final class Archive implements Closeable {
         // does not list. The module path is a set, so its name order is only a deterministic tie-break.
         order(archive.classpath, archive.application.getProperty("classpath"));
         archive.modulepath.sort(Comparator.comparing(Jar::name));
-        archive.layers.values().forEach(jars -> jars.sort(Comparator.comparing(Jar::name)));
+        archive.bind();
         return archive;
     }
 
@@ -214,30 +215,40 @@ final class Archive implements Closeable {
         }
         Map<String, List<String>> classpathGroups = new LinkedHashMap<>();
         Map<String, List<String>> modulepathGroups = new LinkedHashMap<>();
-        Map<String, Map<String, List<String>>> layerGroups = new LinkedHashMap<>();
         for (String entry : source.names()) {
             group(entry, CLASS_PATH, classpathGroups);
             group(entry, MODULE_PATH, modulepathGroups);
-            if (entry.startsWith(LAYERS)) {
-                // layers/<declaring module>/<name>/<jar>/... - keyed by the module as well as the name,
-                // because a layer may itself hold a module that declares one, and two unrelated libraries
-                // may each call theirs the same thing.
-                int module = entry.indexOf('/', LAYERS.length());
-                int name = module < 0 ? -1 : entry.indexOf('/', module + 1);
-                if (module > LAYERS.length() && name > module + 1) {
-                    group(entry.substring(name + 1),
-                            "",
-                            layerGroups.computeIfAbsent(entry.substring(LAYERS.length(), name),
-                                    _ -> new LinkedHashMap<>()));
-                }
-            }
         }
         collect(classpathGroups, CLASS_PATH, source, classpath);
         collect(modulepathGroups, MODULE_PATH, source, modulepath);
-        for (Map.Entry<String, Map<String, List<String>>> layer : layerGroups.entrySet()) {
+    }
+
+    /**
+     * Resolves each {@code layer.<module>.<name>} declaration against the dependencies already indexed. A
+     * layer's modules are bundled among the application's rather than beside them, so a jar both of them
+     * need is stored once and simply loaded twice; the declaration is what tells them apart.
+     */
+    private void bind() {
+        Map<String, Jar> byName = new LinkedHashMap<>();
+        modulepath.forEach(jar -> byName.putIfAbsent(jar.name(), jar));
+        for (String key : application.stringPropertyNames()) {
+            if (!key.startsWith(LAYERS)) {
+                continue;
+            }
             List<Jar> jars = new ArrayList<>();
-            collect(layer.getValue(), LAYERS + layer.getKey() + "/", source, jars);
-            layers.put(layer.getKey(), jars);
+            for (String name : application.getProperty(key).split(",")) {
+                String trimmed = name.strip();
+                if (trimmed.isEmpty()) {
+                    continue;
+                }
+                Jar jar = byName.get(trimmed);
+                if (jar == null) {
+                    throw new IllegalStateException("Layer " + key.substring(LAYERS.length())
+                            + " names " + trimmed + ", which this bundle does not hold");
+                }
+                jars.add(jar);
+            }
+            layers.put(key.substring(LAYERS.length()), jars);
         }
     }
 
@@ -448,7 +459,7 @@ final class Archive implements Closeable {
             if (Files.isRegularFile(root.resolve(APPLICATION))) {
                 names.add(APPLICATION);
             }
-            for (String prefix : List.of(CLASS_PATH, MODULE_PATH, LAYERS)) {
+            for (String prefix : List.of(CLASS_PATH, MODULE_PATH)) {
                 Path base = root.resolve(prefix);
                 if (Files.isDirectory(base)) {
                     try (Stream<Path> files = Files.walk(base)) {
