@@ -27,8 +27,13 @@ final class Archive implements Closeable {
     static final String APPLICATION = "application.properties";
     /** The one store a bundle keeps its dependencies in; what each path holds is named, not placed. */
     static final String JARS = "jars/";
-    /** {@code application.properties} key prefix naming the dependencies a layer holds, by file name. */
-    static final String LAYERS = "layer.";
+    /**
+     * {@code application.properties} key prefixes naming what a layer holds on each of its two paths, by
+     * file name. A layer is a module graph like any other, so it splits the same way the application does:
+     * what carries a module identity is resolved, and the rest is the unnamed module of the layer's own
+     * loader. Which jar goes where is decided by the build and named here, never re-derived at run time.
+     */
+    static final String LAYER_MODULE_PATH = "layer.modulepath.", LAYER_CLASS_PATH = "layer.classpath.";
 
     /** Reads bytes and openable URLs for entries of the outer jar or directory, on demand. */
     interface Source extends Closeable {
@@ -137,7 +142,7 @@ final class Archive implements Closeable {
     private final List<Jar> stored = new ArrayList<>();
     private final List<Jar> classpath = new ArrayList<>();
     private final List<Jar> modulepath = new ArrayList<>();
-    private final Map<String, List<Jar>> layers = new LinkedHashMap<>();
+    private final Map<String, Layer> layers = new LinkedHashMap<>();
     private Source source;
 
     static Archive load(Path location) throws IOException {
@@ -163,14 +168,39 @@ final class Archive implements Closeable {
         return modulepath;
     }
 
+    /** What one layer holds: the modules it resolves, and the jars that are its unnamed module. */
+    record Layer(List<Jar> modulepath, List<Jar> classpath) {
+    }
+
     /**
-     * The bundled module layers, each keyed {@code <declaring module>.<name>} and mapped to the dependencies
-     * it holds. A layer's modules are stored among the application's and told apart by the declaration
-     * alone, which is what keeps them off the application's module path - two versions of one module are the
-     * point of a layer, and one configuration cannot hold both.
+     * The bundled module layers, each keyed {@code <declaring module>.<name>}. A layer's jars are stored
+     * among the application's and told apart by the declaration alone, which is what keeps them off the
+     * application's paths - two versions of one module are the point of a layer, and one configuration
+     * cannot hold both.
      */
-    Map<String, List<Jar>> layers() {
+    Map<String, Layer> layers() {
         return layers;
+    }
+
+    /**
+     * Reads loose jar files as bundled ones, so a layer supplied as a path list is served exactly like a
+     * bundled layer: the same multi-release view, the same code sources, the same loader.
+     */
+    static List<Jar> jars(List<Path> files) throws IOException {
+        List<Jar> jars = new ArrayList<>();
+        for (Path file : files) {
+            if (!Files.isRegularFile(file)) {
+                throw new IllegalStateException(file + " is not a jar file - a path names the jars it holds,"
+                        + " one by one, rather than a folder whose content decides what is read");
+            }
+            Source source = new ZipSource(file);
+            List<String> names = new ArrayList<>(source.names());
+            int[] versions = multiReleaseVersions(names, source, "");
+            List<String> effective = effectiveNames(names, versions);
+            effective.sort(Comparator.naturalOrder());
+            jars.add(new Jar(file.getFileName().toString(), "", effective, versions, source));
+        }
+        return jars;
     }
 
     /**
@@ -206,13 +236,29 @@ final class Archive implements Closeable {
         stored.forEach(jar -> byName.putIfAbsent(jar.name(), jar));
         select(byName, application.getProperty("classpath"), classpath, "classpath");
         select(byName, application.getProperty("modulepath"), modulepath, "modulepath");
+        Map<String, List<Jar>> modules = new LinkedHashMap<>(), classes = new LinkedHashMap<>();
         for (String key : application.stringPropertyNames()) {
-            if (!key.startsWith(LAYERS)) {
+            Map<String, List<Jar>> target;
+            String prefix;
+            if (key.startsWith(LAYER_MODULE_PATH)) {
+                target = modules;
+                prefix = LAYER_MODULE_PATH;
+            } else if (key.startsWith(LAYER_CLASS_PATH)) {
+                target = classes;
+                prefix = LAYER_CLASS_PATH;
+            } else {
                 continue;
             }
             List<Jar> jars = new ArrayList<>();
             select(byName, application.getProperty(key), jars, key);
-            layers.put(key.substring(LAYERS.length()), jars);
+            target.put(key.substring(prefix.length()), jars);
+        }
+        Set<String> names = new LinkedHashSet<>(modules.keySet());
+        names.addAll(classes.keySet());
+        for (String name : names) {
+            layers.put(name, new Layer(
+                    modules.getOrDefault(name, List.of()),
+                    classes.getOrDefault(name, List.of())));
         }
     }
 

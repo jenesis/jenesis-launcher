@@ -54,7 +54,11 @@ Renderer r = Launcher.load("render", Renderer.class).findFirst().orElseThrow();
 ```
 
 The layer's dependencies are bundled among the application's in the same `jars/` store, and
-`layer.my.library.render=<jar>,<jar>` in `application.properties` says which are its. So a jar the layer and
+`layer.modulepath.my.library.render=<jar>,<jar>` in `application.properties` says which are its, with a
+`layer.classpath.` counterpart for the jars that carry no module identity. A layer splits the two paths
+exactly as the application does, because a library worth isolating usually drags a long tail of jars that
+were never modularized: what is named is resolved, the rest is the unnamed module of the layer's own
+loader, and the layer's automatic modules read it as they would on a real `-cp`. So a jar the layer and
 the application both need is stored **once** and simply loaded twice, and two versions stand side by side
 because each is named after the jar it came from. The declaring module is part of the key because a layer
 may itself hold a module that declares one - nesting is unbounded - and the runtime builds the same key
@@ -70,8 +74,9 @@ this module, which `ServiceLoader` otherwise refuses because it checks `uses` ag
 no overload that takes one. Which module calls decides whose layer a name means, so two modules may each
 declare `render` without colliding.
 
-Outside a bundle - a deployment that unpacked its dependencies - `jenesis.layer.<module>.<name>` names the
-layer's module path instead, so the same code runs either way.
+Outside a bundle - a deployment that unpacked its dependencies - `jenesis.layer.modulepath.<module>.<name>`
+and `jenesis.layer.classpath.<module>.<name>` name the layer's two paths instead, jar by jar. A layer read
+that way is built from the same view as a bundled one, so the same code runs either way.
 
 Nesting needs nothing further: `Launcher.layer` parents a layer on its *caller's*, so a module sitting
 inside one layer that asks for another gets a child of the first, and the API module it shares resolves

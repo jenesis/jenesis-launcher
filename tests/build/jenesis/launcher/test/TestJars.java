@@ -490,6 +490,25 @@ final class TestJars {
     }
 
     /**
+     * As above, with a constructor that also calls {@code target.run(key)} - so instantiating the provider
+     * proves it could reach {@code target}, wherever that class was loaded from.
+     */
+    static byte[] serviceProvider(String binaryName, String contract, String target, String key) {
+        return ClassFile.of().build(ClassDesc.of(binaryName), builder -> builder
+                .withFlags(ClassFile.ACC_PUBLIC)
+                .withSuperclass(ConstantDescs.CD_Object)
+                .withInterfaceSymbols(ClassDesc.of(contract))
+                .withMethodBody(ConstantDescs.INIT_NAME, ConstantDescs.MTD_void, ClassFile.ACC_PUBLIC,
+                        code -> code.aload(0)
+                                .invokespecial(ConstantDescs.CD_Object, ConstantDescs.INIT_NAME,
+                                        ConstantDescs.MTD_void)
+                                .loadConstant(key)
+                                .invokestatic(ClassDesc.of(target), "run",
+                                        MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_String))
+                                .return_()));
+    }
+
+    /**
      * A main that stores the class name of the first provider of {@code service} in the caller's
      * {@code layer} into {@code System.setProperty(args[0], …)} - the whole bridge in one call, with no
      * {@code uses} clause in the module that runs it.
@@ -552,6 +571,16 @@ final class TestJars {
         entries.put("module-info.class", moduleInfo(moduleName, requires, exports));
         entries.putAll(classes);
         return jar(entries);
+    }
+
+    /** A manifest carrying one main attribute, for a fixture that needs a header of its own. */
+    static byte[] manifest(String name, String value) throws IOException {
+        Manifest manifest = new Manifest();
+        manifest.getMainAttributes().putValue("Manifest-Version", "1.0");
+        manifest.getMainAttributes().putValue(name, value);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        manifest.write(out);
+        return out.toByteArray();
     }
 
     /** A jar holding a class plus an {@code Automatic-Module-Name} manifest header. */
@@ -620,7 +649,8 @@ final class TestJars {
         Map<String, String> declared = new LinkedHashMap<>();
         declared.put("classpath", String.join(",", classpath.keySet()));
         declared.put("modulepath", String.join(",", modulepath.keySet()));
-        layers.forEach((layer, jars) -> declared.put("layer." + layer, String.join(",", jars.keySet())));
+        layers.forEach((layer, jars) ->
+                declared.put("layer.modulepath." + layer, String.join(",", jars.keySet())));
         declared.putAll(application);
         return declared;
     }

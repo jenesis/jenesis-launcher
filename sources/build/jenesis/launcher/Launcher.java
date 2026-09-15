@@ -82,30 +82,26 @@ public final class Launcher {
         ModuleLayer parent = module.getLayer() == null ? ModuleLayer.boot() : module.getLayer();
         try {
             Archive archive = bundle(caller);
-            List<Archive.Jar> bundled = archive == null
-                    ? List.of()
-                    : archive.layers().getOrDefault(module.getName() + "." + name, List.of());
-            java.lang.module.Configuration configuration;
-            ClassLoader loader;
-            if (bundled.isEmpty()) {
-                ModuleFinder finder = ModuleFinder.of(paths(module, name));
-                configuration = parent.configuration().resolveAndBind(finder, ModuleFinder.of(), finder
-                        .findAll()
-                        .stream()
-                        .map(reference -> reference.descriptor().name())
-                        .collect(Collectors.toUnmodifiableSet()));
-                loader = null;
+            Archive.Layer bundled = archive == null
+                    ? null
+                    : archive.layers().get(module.getName() + "." + name);
+            // A layer bundled in the jar and one handed over as paths are the same graph read from two
+            // places, so they are built the same way rather than by two mechanisms that can drift.
+            List<Archive.Jar> modulepath, classpath;
+            if (bundled == null) {
+                archive = null;
+                modulepath = Archive.jars(paths(module, name, Archive.LAYER_MODULE_PATH));
+                classpath = Archive.jars(paths(module, name, Archive.LAYER_CLASS_PATH));
             } else {
-                InMemoryModuleFinder finder = new InMemoryModuleFinder(bundled);
-                configuration = parent.configuration()
-                        .resolveAndBind(finder, ModuleFinder.of(), finder.moduleNames());
-                loader = new InMemoryClassLoader(archive, List.of(), finder, caller.getClassLoader());
+                modulepath = bundled.modulepath();
+                classpath = bundled.classpath();
             }
+            InMemoryModuleFinder finder = new InMemoryModuleFinder(modulepath);
+            java.lang.module.Configuration configuration = parent.configuration()
+                    .resolveAndBind(finder, ModuleFinder.of(), finder.moduleNames());
             verify(name, configuration);
-            return loader == null
-                    ? ModuleLayer.defineModulesWithOneLoader(configuration, List.of(parent),
-                            caller.getClassLoader()).layer()
-                    : ModuleLayer.defineModules(configuration, List.of(parent), _ -> loader).layer();
+            ClassLoader loader = new InMemoryClassLoader(archive, classpath, finder, caller.getClassLoader());
+            return ModuleLayer.defineModules(configuration, List.of(parent), _ -> loader).layer();
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to define layer " + name + " for " + module, e);
         }
@@ -133,24 +129,17 @@ public final class Launcher {
     }
 
     /**
-     * The module path of the application itself: everything bundled that no layer claims. A layer's modules
-     * are bundled among the application's, so that a jar both need is stored once and simply loaded twice -
-     * which means they have to be withheld here, since two versions of one module are the point of a layer
-     * and one configuration cannot hold both.
+     * One of a layer's two paths, as named by {@code jenesis.layer.modulepath.<module>.<name>} or its
+     * {@code classpath} counterpart. Only the module path must be named: a layer that isolates nothing but
+     * modules has no class path, and saying so by omission is how that reads.
      */
-    private static List<Archive.Jar> application(Archive archive) {
-        if (archive.layers().isEmpty()) {
-            return archive.modulepath();
-        }
-        Set<Archive.Jar> layered = Collections.newSetFromMap(new IdentityHashMap<>());
-        archive.layers().values().forEach(layered::addAll);
-        return archive.modulepath().stream().filter(jar -> !layered.contains(jar)).toList();
-    }
-
-    private static Path[] paths(Module module, String name) {
-        String property = LAYER_PATH + module.getName() + "." + name;
+    private static List<Path> paths(Module module, String name, String prefix) {
+        String property = LAYER_PATH + prefix.substring("layer.".length()) + module.getName() + "." + name;
         String declaration = System.getProperty(property);
         if (declaration == null || declaration.isBlank()) {
+            if (!prefix.equals(Archive.LAYER_MODULE_PATH)) {
+                return List.of();
+            }
             throw new IllegalStateException("No layer " + name + " of " + module.getName() + " is bundled in"
                     + " this jar, and no " + property + " names where its modules are - a deployment that"
                     + " unpacked its dependencies supplies that property");
@@ -158,7 +147,7 @@ public final class Launcher {
         return Arrays.stream(declaration.split(File.pathSeparator))
                 .filter(entry -> !entry.isBlank())
                 .map(Path::of)
-                .toArray(Path[]::new);
+                .toList();
     }
 
     /**
@@ -275,7 +264,9 @@ public final class Launcher {
         InMemoryClassLoader loader;
         ModuleLayer.Controller controller = null;
         ModuleLayer layer = null;
-        List<Archive.Jar> modulepath = application(archive);
+        // Every path is named, so the application's module path is simply what `modulepath` declares: a
+        // layer's jars are stored among these but never named here, and a jar both need is named by both.
+        List<Archive.Jar> modulepath = archive.modulepath();
         if (!modulepath.isEmpty()) {
             InMemoryModuleFinder finder = new InMemoryModuleFinder(modulepath);
             // Reproduce `java -m <mainModule>`: root the main module and let resolution pull in its

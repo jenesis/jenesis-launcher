@@ -43,20 +43,32 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
     private final Map<String, ModuleReader> readers = new LinkedHashMap<>();
     private final Map<String, ProtectionDomain> domains = new ConcurrentHashMap<>();
     private final Map<String, Optional<Manifest>> manifests = new ConcurrentHashMap<>();
+    private final Set<String> shadowed;
 
     InMemoryClassLoader(Archive archive, InMemoryModuleFinder finder, ClassLoader parent)
             throws IOException {
-        this(archive, archive.classpath(), finder, parent);
+        this(archive, archive.classpath(), Set.of(), finder, parent);
     }
 
     /**
-     * As above, over an explicit class path rather than the archive's own. A layer is a module path and
-     * nothing else, so it is built with an empty one: its loader hosts the layer's named modules, and
-     * anything outside them resolves through the parent rather than through a class path of its own.
+     * A layer's loader, over an explicit class path rather than the archive's own, and over no archive at
+     * all when the layer was supplied as loose files. A layer is a module graph like any other and splits
+     * the same way: what carries a module identity is resolved, and the rest is this loader's unnamed
+     * module, which the layer's automatic modules read as they would on a real {@code -cp}.
+     *
+     * <p>Unlike the application's loader, a layer's class path shadows the parent rather than deferring to
+     * it. The parent here is the caller's own loader, which is where the version the layer exists to hide
+     * lives; deferring to it would hand the layer that very version back.</p>
      */
     InMemoryClassLoader(Archive archive, List<Archive.Jar> classpath, InMemoryModuleFinder finder,
                         ClassLoader parent) throws IOException {
+        this(archive, classpath, packages(classpath), finder, parent);
+    }
+
+    private InMemoryClassLoader(Archive archive, List<Archive.Jar> classpath, Set<String> shadowed,
+                                InMemoryModuleFinder finder, ClassLoader parent) throws IOException {
         super("jenesis", parent);
+        this.shadowed = shadowed;
         this.archive = archive;
         this.classpath = classpath;
         if (finder != null) {
@@ -88,7 +100,7 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
      */
     @Override
     protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
-        if (packageToModule.containsKey(packageOf(name))) {
+        if (packageToModule.containsKey(packageOf(name)) || shadowed.contains(packageOf(name))) {
             synchronized (getClassLoadingLock(name)) {
                 Class<?> loaded = findLoadedClass(name);
                 if (loaded == null) {
@@ -101,6 +113,20 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
             }
         }
         return super.loadClass(name, resolve);
+    }
+
+    /** The packages a layer's class path carries, which its loader therefore serves before its parent. */
+    private static Set<String> packages(List<Archive.Jar> classpath) {
+        Set<String> packages = new HashSet<>();
+        for (Archive.Jar jar : classpath) {
+            for (String entry : jar.names()) {
+                int slash = entry.lastIndexOf('/');
+                if (slash > 0 && entry.endsWith(".class")) {
+                    packages.add(entry.substring(0, slash).replace('/', '.'));
+                }
+            }
+        }
+        return packages;
     }
 
     @Override
@@ -204,7 +230,8 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
      * the bundled bytes. The Base64 value is ASCII, so it round-trips through the ISO-8859-1 properties file.
      */
     private CodeSigner[] signers(String name) {
-        String encoded = archive.application().getProperty(SIGNATURE_PREFIX + name);
+        // A layer read from loose files has no descriptor to attest a signer, so it reconstructs none.
+        String encoded = archive == null ? null : archive.application().getProperty(SIGNATURE_PREFIX + name);
         if (encoded == null || encoded.isBlank()) {
             return null;
         }
@@ -431,6 +458,8 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
      */
     @Override
     public void close() throws IOException {
-        archive.close();
+        if (archive != null) {
+            archive.close();
+        }
     }
 }

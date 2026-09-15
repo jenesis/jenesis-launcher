@@ -27,7 +27,8 @@ covers what it does, the tests and releasing. The user documentation is
 - The jar layout and the `application.properties` descriptor are the contract with the build tool's
   `Launcher` step in jenesis/jenesis and with the documentation: one `jars/<jar>/…` store, the descriptor
   keys (`mainClass`, `mainModule`, `classpath`, `modulepath`, `agentClass`, `addExports`, `addOpens`,
-  `addReads`, `signature.<dep>`, `layer.<declaring module>.<name>`) and the manifest attributes.
+  `addReads`, `signature.<dep>`, `layer.modulepath.<declaring module>.<name>` and its `layer.classpath.`
+  counterpart) and the manifest attributes.
   A change to any of them is made together with the build tool and the documentation. The descriptor
   stays a properties file, unlike the build tool's `bundle` target, whose descriptor is a Java argument
   file: a bundle is handed to `java` as a command line, while this jar is read in process and carries
@@ -45,6 +46,14 @@ covers what it does, the tests and releasing. The user documentation is
   module, so nothing extra travels. What keeps a layer's modules off the application's module path is that
   `modulepath` does not name them - two versions of one module are the point of a layer, and one
   configuration cannot hold both.
+- A layer splits into a module path and a class path exactly as the application does, because the libraries
+  it exists to isolate are the ones whose trees are mostly jars with no module identity. What is named is
+  resolved; the rest is the unnamed module of the layer's own loader, which the layer's automatic modules
+  read as they would on a real `-cp`. The split is decided by the build and named in the descriptor, never
+  re-derived here. Unlike the application's loader, a layer's loader serves its own class path **before**
+  its parent: the parent is the caller, which holds the very version the layer exists to hide, so deferring
+  to it would hand that version back. A layer read from loose files is built from the same `Archive.Jar`
+  view as a bundled one, so both paths are one mechanism rather than two that can drift.
   `Launcher.layer`/`Launcher.load` define it on demand, as a child of the caller's layer, so every module
   the layer does not itself hold - the API module it shares with the caller above all - resolves from the
   caller and is the same class on both sides. Which module calls decides whose layer a name means, so two

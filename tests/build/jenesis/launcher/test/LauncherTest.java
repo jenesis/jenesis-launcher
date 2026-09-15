@@ -1072,7 +1072,7 @@ class LauncherTest {
         byte[] provider = providerJar();
         TestJars.writeBundle(bundle,
                 Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main",
-                        "layer.demo.host.render", "provider.jar"),
+                        "layer.modulepath.demo.host.render", "provider.jar"),
                 Map.of(),
                 layerFixture(),
                 Map.of("demo.host.render", Map.of("provider.jar", provider)));
@@ -1087,12 +1087,49 @@ class LauncherTest {
     }
 
     @Test
+    void readsALayersOwnClassPathFromAnAutomaticModuleInIt() throws Exception {
+        // The case layers exist for: a legacy library whose tree is mostly jars with no module identity.
+        // What is used explicitly gets a name and is resolved; the long tail is the layer's own unnamed
+        // module, which an automatic module in the layer reads as it would on a real -cp. The host holds a
+        // class of the very same name, and must not be the one the layer sees.
+        Path bundle = directory.resolve("layer-classpath.jar");
+        String key = "jenesis.test.layer.tail";
+        byte[] provider = TestJars.jar(Map.of(
+                "META-INF/MANIFEST.MF", TestJars.manifest("Automatic-Module-Name", "demo.provider"),
+                "META-INF/services/demo.spi.Contract", "demo.provider.Impl".getBytes(StandardCharsets.UTF_8),
+                "demo/provider/Impl.class", TestJars.serviceProvider(
+                        "demo.provider.Impl", "demo.spi.Contract", "demo.lib.Value", key)));
+        Map<String, byte[]> host = layerFixture();
+        host.put("lib-host.jar", TestJars.classJar("demo.lib.Value", TestJars.runner("demo.lib.Value", "host")));
+
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main",
+                        "modulepath", "spi.jar,host.jar",
+                        "classpath", "lib-host.jar",
+                        "layer.modulepath.demo.host.render", "provider.jar",
+                        "layer.classpath.demo.host.render", "lib-layer.jar"),
+                Map.of(),
+                host,
+                Map.of("demo.host.render", Map.of(
+                        "provider.jar", provider,
+                        "lib-layer.jar", TestJars.classJar("demo.lib.Value",
+                                TestJars.runner("demo.lib.Value", "layer")))));
+
+        System.clearProperty(key);
+        launch(bundle, "jenesis.test.layer.tail.provider");
+
+        assertThat(System.getProperty(key))
+                .as("the layer reads its own class path, not the host's copy of the same class")
+                .isEqualTo("layer");
+    }
+
+    @Test
     void withholdsALayersModulesFromTheApplicationModulePath() throws Exception {
         Path bundle = directory.resolve("withheld.jar");
         byte[] provider = providerJar();
         TestJars.writeBundle(bundle,
                 Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main",
-                        "layer.demo.host.render", "provider.jar"),
+                        "layer.modulepath.demo.host.render", "provider.jar"),
                 Map.of(),
                 layerFixture(),
                 Map.of("demo.host.render", Map.of("provider.jar", provider)));
@@ -1119,7 +1156,7 @@ class LauncherTest {
                         TestJars.serviceProvider("demo.provider.Impl", "demo.spi.Contract")));
         TestJars.writeBundle(bundle,
                 Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main",
-                        "layer.demo.host.render", "provider.jar"),
+                        "layer.modulepath.demo.host.render", "provider.jar"),
                 Map.of(),
                 layerFixture(),
                 Map.of("demo.host.render", Map.of("provider.jar", provider)));
@@ -1141,18 +1178,19 @@ class LauncherTest {
                 Map.of(),
                 layerFixture());
         Path folder = Files.createDirectory(directory.resolve("render"));
-        Files.write(folder.resolve("provider.jar"), providerJar());
+        Path provider = folder.resolve("provider.jar");
+        Files.write(provider, providerJar());
 
         String key = "jenesis.test.layer.property";
         System.clearProperty(key);
-        System.setProperty("jenesis.layer.demo.host.render", folder.toString());
+        System.setProperty("jenesis.layer.modulepath.demo.host.render", provider.toString());
         try {
             launch(bundle, key);
             assertThat(System.getProperty(key))
                     .as("a deployment that unpacked its dependencies names the layer's path instead")
                     .isEqualTo("demo.provider.Impl");
         } finally {
-            System.clearProperty("jenesis.layer.demo.host.render");
+            System.clearProperty("jenesis.layer.modulepath.demo.host.render");
         }
     }
 
@@ -1173,8 +1211,8 @@ class LauncherTest {
                         TestJars.serviceProvider("demo.intruder.Impl", "demo.spi.Contract")));
         TestJars.writeBundle(bundle,
                 Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main",
-                        "layer.demo.host.render", "provider.jar",
-                        "layer.demo.other.render", "intruder.jar"),
+                        "layer.modulepath.demo.host.render", "provider.jar",
+                        "layer.modulepath.demo.other.render", "intruder.jar"),
                 Map.of(),
                 modules,
                 Map.of("demo.host.render", Map.of("provider.jar", mine),
