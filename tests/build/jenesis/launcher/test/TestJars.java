@@ -454,6 +454,68 @@ final class TestJars {
         });
     }
 
+    /** A {@code module-info.class} that also declares {@code provides service with implementation}. */
+    static byte[] moduleInfo(String moduleName, Set<String> requires, Set<String> exports,
+                             String service, String implementation) {
+        return ClassFile.of().buildModule(ModuleAttribute.of(ModuleDesc.of(moduleName), builder -> {
+            builder.requires(ModuleDesc.of("java.base"), ClassFile.ACC_MANDATED, null);
+            for (String require : requires) {
+                builder.requires(ModuleDesc.of(require), 0, null);
+            }
+            for (String export : exports) {
+                builder.exports(PackageDesc.of(export), 0);
+            }
+            builder.provides(ModuleProvideInfo.of(ClassDesc.of(service), List.of(ClassDesc.of(implementation))));
+        }));
+    }
+
+    /** A method-less public interface, enough to be a service type. */
+    static byte[] serviceInterface(String binaryName) {
+        return ClassFile.of().build(ClassDesc.of(binaryName), builder -> builder
+                .withFlags(ClassFile.ACC_PUBLIC | ClassFile.ACC_INTERFACE | ClassFile.ACC_ABSTRACT)
+                .withSuperclass(ConstantDescs.CD_Object));
+    }
+
+    /** A public class implementing {@code contract} with a public no-argument constructor. */
+    static byte[] serviceProvider(String binaryName, String contract) {
+        return ClassFile.of().build(ClassDesc.of(binaryName), builder -> builder
+                .withFlags(ClassFile.ACC_PUBLIC)
+                .withSuperclass(ConstantDescs.CD_Object)
+                .withInterfaceSymbols(ClassDesc.of(contract))
+                .withMethodBody(ConstantDescs.INIT_NAME, ConstantDescs.MTD_void, ClassFile.ACC_PUBLIC,
+                        code -> code.aload(0)
+                                .invokespecial(ConstantDescs.CD_Object, ConstantDescs.INIT_NAME,
+                                        ConstantDescs.MTD_void)
+                                .return_()));
+    }
+
+    /**
+     * A main that stores the class name of the first provider of {@code service} in the caller's
+     * {@code layer} into {@code System.setProperty(args[0], …)} - the whole bridge in one call, with no
+     * {@code uses} clause in the module that runs it.
+     */
+    static byte[] loadServiceMain(String binaryName, String layer, String service) {
+        ClassDesc cdLauncher = ClassDesc.of("build.jenesis.launcher.Launcher");
+        ClassDesc cdServiceLoader = ClassDesc.of("java.util.ServiceLoader");
+        ClassDesc cdOptional = ClassDesc.of("java.util.Optional");
+        ClassDesc cdClass = ClassDesc.of("java.lang.Class");
+        return main(binaryName, code -> code
+                .aload(0).iconst_0().aaload()
+                .loadConstant(layer)
+                .loadConstant(ClassDesc.of(service))
+                .invokestatic(cdLauncher, "load",
+                        MethodTypeDesc.of(cdServiceLoader, ConstantDescs.CD_String, cdClass))
+                .invokevirtual(cdServiceLoader, "findFirst", MethodTypeDesc.of(cdOptional))
+                .invokevirtual(cdOptional, "orElseThrow", MethodTypeDesc.of(ConstantDescs.CD_Object))
+                .invokevirtual(ConstantDescs.CD_Object, "getClass", MethodTypeDesc.of(cdClass))
+                .invokevirtual(cdClass, "getName", MethodTypeDesc.of(ConstantDescs.CD_String))
+                .invokestatic(CD_System, "setProperty",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String,
+                                ConstantDescs.CD_String))
+                .pop()
+                .return_());
+    }
+
     /** Packs entries into a jar (zip) image. */
     static byte[] jar(Map<String, byte[]> entries) throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream();

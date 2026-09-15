@@ -35,7 +35,37 @@ java -javaagent:foo.jar=args -jar app.jar   # a hand-assembled jar with no mainC
 ```
 
 The build tool writes `mainClass`, `mainModule` and `classpath` into the jar's `application.properties`; the
-agent, module-access and signer keys the launcher also understands are for jars assembled by other means.
+agent, module-access, signer and layer keys the launcher also understands are for jars assembled by other
+means.
+
+## Module layers
+
+A module can keep a dependency private - two versions of one library in one JVM, with no package relocated.
+It declares the layer, requires this module, and asks for it by name:
+
+```java
+module my.library {
+    requires build.jenesis.launcher;
+    requires my.library.spi;          // the API module, shared with the layer
+}
+
+Renderer r = Launcher.load("render", Renderer.class).findFirst().orElseThrow();
+```
+
+The layer's dependencies are bundled under `modulepath/` like any others and named by
+`layer.render=<jar>,<jar>` in `application.properties`, which also withholds them from the application's own
+module path. They are read from the still-open jar by a second `InMemoryClassLoader`: nothing is relocated
+and nothing is unpacked.
+
+The layer is a child of the caller's, so every module it does not itself hold resolves from the caller - the
+API module above all, which is therefore the *same* class on both sides, and the call across the boundary is
+an ordinary interface call. The calling module needs no `uses` clause; `load` adds the service dependence to
+this module, which `ServiceLoader` otherwise refuses because it checks `uses` against the caller and offers
+no overload that takes one. Which module calls decides whose layer a name means, so two modules may each
+declare `render` without colliding.
+
+Outside a bundle - a deployment that unpacked its dependencies - `jenesis.layer.<name>` names the layer's
+module path instead, so the same code runs either way.
 
 ## Building it
 

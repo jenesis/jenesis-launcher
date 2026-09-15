@@ -28,7 +28,188 @@ import module java.instrument;
  */
 public final class Launcher {
 
+    /** {@code application.properties} key prefix naming the dependencies a bundled layer holds. */
+    private static final String LAYER = "layer.";
+
+    /** System property prefix naming a layer's module path when it is not bundled in this jar. */
+    private static final String LAYER_PATH = "jenesis.layer.";
+
+    private static final StackWalker WALKER =
+            StackWalker.getInstance(StackWalker.Option.RETAIN_CLASS_REFERENCE);
+
+    private static final Map<Module, Map<String, ModuleLayer>> LAYERS = new ConcurrentHashMap<>();
+
     private Launcher() {
+    }
+
+    /**
+     * The module layer the calling module declared under {@code name}, defined once and cached. The layer is
+     * a child of the caller's own, so every module it does not itself hold - the API module the caller and
+     * the layer share above all - resolves from the caller's layer and is the very same class on both sides.
+     *
+     * <p>Two modules may each declare a layer called {@code render} without colliding: the caller's module,
+     * not the name alone, identifies which is meant.</p>
+     *
+     * <p>The modules come from this jar when the caller runs inside a bundle that declares them, read on
+     * demand like every other bundled class; otherwise from the path named by
+     * {@code jenesis.layer.<name>}, which is how a deployment that unpacked its dependencies supplies
+     * them.</p>
+     */
+    public static ModuleLayer layer(String name) {
+        return layer(WALKER.getCallerClass(), name);
+    }
+
+    /**
+     * The providers of {@code service} in the calling module's {@code name} layer - {@link #layer} followed
+     * by a {@link ServiceLoader} over it.
+     *
+     * <p>{@code ServiceLoader} checks {@code uses} against the calling module and offers no overload that
+     * takes a caller, so this method would be refused for a service this launcher cannot name. It therefore
+     * adds the service dependence to its own module first, which a module is permitted to do for itself.
+     * The calling module needs no {@code uses} clause: the call names the service, which is the declaration
+     * this mechanism actually goes on.</p>
+     */
+    public static <S> ServiceLoader<S> load(String name, Class<S> service) {
+        ModuleLayer layer = layer(WALKER.getCallerClass(), name);
+        Launcher.class.getModule().addUses(service);
+        return ServiceLoader.load(layer, service);
+    }
+
+    private static ModuleLayer layer(Class<?> caller, String name) {
+        return LAYERS.computeIfAbsent(caller.getModule(), _ -> new ConcurrentHashMap<>())
+                .computeIfAbsent(name, key -> define(caller, key));
+    }
+
+    private static ModuleLayer define(Class<?> caller, String name) {
+        Module module = caller.getModule();
+        ModuleLayer parent = module.getLayer() == null ? ModuleLayer.boot() : module.getLayer();
+        try {
+            Archive archive = bundle(caller);
+            List<Archive.Jar> bundled = archive == null ? List.of() : bundled(archive, name);
+            java.lang.module.Configuration configuration;
+            ClassLoader loader;
+            if (bundled.isEmpty()) {
+                ModuleFinder finder = ModuleFinder.of(paths(name));
+                configuration = parent.configuration().resolveAndBind(finder, ModuleFinder.of(), finder
+                        .findAll()
+                        .stream()
+                        .map(reference -> reference.descriptor().name())
+                        .collect(Collectors.toUnmodifiableSet()));
+                loader = null;
+            } else {
+                InMemoryModuleFinder finder = new InMemoryModuleFinder(bundled);
+                configuration = parent.configuration()
+                        .resolveAndBind(finder, ModuleFinder.of(), finder.moduleNames());
+                loader = new InMemoryClassLoader(archive, List.of(), finder, caller.getClassLoader());
+            }
+            verify(name, configuration);
+            return loader == null
+                    ? ModuleLayer.defineModulesWithOneLoader(configuration, List.of(parent),
+                            caller.getClassLoader()).layer()
+                    : ModuleLayer.defineModules(configuration, List.of(parent), _ -> loader).layer();
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to define layer " + name + " for " + module, e);
+        }
+    }
+
+    /**
+     * Refuses a layer that both provides a service and holds the module declaring it: the caller would look
+     * the service up against a different class of the same name and find no provider. The build refuses this
+     * too, so this is the backstop for a bundle assembled by other means.
+     */
+    private static void verify(String name, java.lang.module.Configuration configuration) {
+        for (ResolvedModule resolved : configuration.modules()) {
+            for (ModuleDescriptor.Provides provides : resolved.reference().descriptor().provides()) {
+                String contract = packageOf(provides.service());
+                for (ResolvedModule declaring : configuration.modules()) {
+                    if (declaring.reference().descriptor().packages().contains(contract)) {
+                        throw new IllegalStateException("Layer " + name + " provides " + provides.service()
+                                + ", but holds " + declaring.name() + ", which declares it - the caller would"
+                                + " look the service up against a different class of the same name and find"
+                                + " no provider; share that module with the caller instead of isolating it");
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * The module path of the application itself: everything under {@code modulepath/} that no layer claims.
+     * A layer's modules are bundled the same way as any other dependency and are told apart only by the
+     * {@code layer.<name>} declaration, so they have to be withheld here - two versions of one module are
+     * the point of a layer, and one configuration cannot hold both.
+     */
+    private static List<Archive.Jar> application(Archive archive) {
+        Set<String> layered = new HashSet<>();
+        for (String key : archive.application().stringPropertyNames()) {
+            if (key.startsWith(LAYER)) {
+                Arrays.stream(archive.application().getProperty(key).split(","))
+                        .map(String::strip)
+                        .filter(entry -> !entry.isEmpty())
+                        .forEach(layered::add);
+            }
+        }
+        return layered.isEmpty()
+                ? archive.modulepath()
+                : archive.modulepath().stream().filter(jar -> !layered.contains(jar.name())).toList();
+    }
+
+    /** The dependencies of a bundled layer, in the archive's own module-path order; empty if none. */
+    private static List<Archive.Jar> bundled(Archive archive, String name) {
+        String declaration = archive.application().getProperty(LAYER + name);
+        if (declaration == null || declaration.isBlank()) {
+            return List.of();
+        }
+        Set<String> names = Arrays.stream(declaration.split(","))
+                .map(String::strip)
+                .filter(entry -> !entry.isEmpty())
+                .collect(Collectors.toUnmodifiableSet());
+        return archive.modulepath().stream().filter(jar -> names.contains(jar.name())).toList();
+    }
+
+    private static Path[] paths(String name) {
+        String declaration = System.getProperty(LAYER_PATH + name);
+        if (declaration == null || declaration.isBlank()) {
+            throw new IllegalStateException("No layer " + name + " is bundled in this jar, and no "
+                    + LAYER_PATH + name + " names where its modules are - a deployment that unpacked its"
+                    + " dependencies supplies that property");
+        }
+        return Arrays.stream(declaration.split(File.pathSeparator))
+                .filter(entry -> !entry.isBlank())
+                .map(Path::of)
+                .toArray(Path[]::new);
+    }
+
+    /**
+     * The bundle the calling class was loaded from, or {@code null} when it was not bundled. A bundled class
+     * has a {@code jar:} code source into the outer jar, so the jar it names is the archive to read the
+     * layer from. It is the caller's bundle that matters, not this launcher's: the launcher may be the
+     * shaded bootstrap in the jar root, an ordinary module-path dependency, or neither.
+     */
+    private static Archive bundle(Class<?> caller) throws IOException {
+        CodeSource source = caller.getProtectionDomain().getCodeSource();
+        if (source == null || source.getLocation() == null) {
+            return null;
+        }
+        String location = source.getLocation().toString();
+        if (location.startsWith("jar:")) {
+            int separator = location.indexOf("!/");
+            location = separator < 0 ? location.substring(4) : location.substring(4, separator);
+        }
+        URI uri = URI.create(location);
+        if (!"file".equals(uri.getScheme())) {
+            return null;
+        }
+        Path path = Path.of(uri);
+        if (!Files.exists(path)) {
+            return null;
+        }
+        Archive archive = Archive.load(path);
+        if (archive.application().isEmpty()) {
+            archive.close();
+            return null;
+        }
+        return archive;
     }
 
     public static void main(String[] args) throws Exception {
@@ -113,8 +294,9 @@ public final class Launcher {
         InMemoryClassLoader loader;
         ModuleLayer.Controller controller = null;
         ModuleLayer layer = null;
-        if (!archive.modulepath().isEmpty()) {
-            InMemoryModuleFinder finder = new InMemoryModuleFinder(archive.modulepath());
+        List<Archive.Jar> modulepath = application(archive);
+        if (!modulepath.isEmpty()) {
+            InMemoryModuleFinder finder = new InMemoryModuleFinder(modulepath);
             // Reproduce `java -m <mainModule>`: root the main module and let resolution pull in its
             // `requires` closure (resolveAndBind also binds services). Unless this is a self-contained module
             // graph - a main module over a pure named-module path - every module is rooted instead, the
