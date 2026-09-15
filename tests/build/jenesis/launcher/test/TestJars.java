@@ -483,6 +483,15 @@ final class TestJars {
         return jar(entries);
     }
 
+    /** A jar holding several classes plus a real {@code module-info.class} for an explicit module. */
+    static byte[] modularJar(String moduleName, Map<String, byte[]> classes,
+                             Set<String> requires, Set<String> exports) throws IOException {
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("module-info.class", moduleInfo(moduleName, requires, exports));
+        entries.putAll(classes);
+        return jar(entries);
+    }
+
     /** A jar holding a class plus an {@code Automatic-Module-Name} manifest header. */
     static byte[] automaticModuleJar(String moduleName, String binaryName, byte[] classBytes) throws IOException {
         Manifest manifest = new Manifest();

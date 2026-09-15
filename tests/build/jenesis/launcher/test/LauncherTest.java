@@ -1017,6 +1017,32 @@ class LauncherTest {
                 .hasMessageContaining("mainClass");
     }
 
+    @Test
+    void bundledModuleShadowsASamePackageClassTheOuterJarAlsoCarries() throws Exception {
+        Path bundle = directory.resolve("shadowing.jar");
+        // The package this module owns is the launcher's own, which the parent loader certainly has, so
+        // the class is reachable from both sides - the case parent-first delegation used to decide wrongly.
+        byte[] shadowing = TestJars.modularJar("demo.shadowing",
+                Map.of("demo/shadow/Main.class",
+                                TestJars.reflectModuleNameMain("demo.shadow.Main",
+                                        "build.jenesis.launcher.Archive"),
+                        "build/jenesis/launcher/Archive.class",
+                                TestJars.setPropertyMain("build.jenesis.launcher.Archive")),
+                Set.of(), Set.of("demo.shadow", "build.jenesis.launcher"));
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.shadowing", "mainClass", "demo.shadow.Main"),
+                Map.of(),
+                Map.of("demo-shadowing.jar", shadowing));
+
+        String key = "jenesis.test.shadowing";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key))
+                .as("a module's package shadows the same package outside the bundle, as on a real module path")
+                .isEqualTo("demo.shadowing");
+    }
+
     private static void launch(Path bundle, String... args) throws Exception {
         ClassLoader original = Thread.currentThread().getContextClassLoader();
         try {

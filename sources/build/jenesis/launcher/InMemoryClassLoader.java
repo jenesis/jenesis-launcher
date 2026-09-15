@@ -66,6 +66,33 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
         }
     }
 
+    /**
+     * Resolves a class whose package a bundled module owns against that module first, and delegates
+     * everything else to the parent as usual. The JDK's own layer loader
+     * ({@code jdk.internal.loader.Loader}) does the same, and it is what makes
+     * {@code java -p modulepath -cp classpath} shadow a same-named class-path package with the module's.
+     * Inheriting {@link ClassLoader}'s parent-first delegation broke that rule whenever the parent also had
+     * the package: {@link #findClass} implements the shadowing but was never reached, so a class the outer
+     * jar itself carries - this launcher's own shaded classes, for one - won over a bundled module of the
+     * same package, and a module path entry naming that package could not be reached at all.
+     */
+    @Override
+    protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+        if (packageToModule.containsKey(packageOf(name))) {
+            synchronized (getClassLoadingLock(name)) {
+                Class<?> loaded = findLoadedClass(name);
+                if (loaded == null) {
+                    loaded = findClass(name);
+                }
+                if (resolve) {
+                    resolveClass(loaded);
+                }
+                return loaded;
+            }
+        }
+        return super.loadClass(name, resolve);
+    }
+
     @Override
     protected Class<?> findClass(String name) throws ClassNotFoundException {
         String resource = name.replace('.', '/') + ".class";
