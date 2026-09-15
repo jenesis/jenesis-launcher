@@ -28,7 +28,10 @@ covers what it does, the tests and releasing. The user documentation is
   `Launcher` step in jenesis/jenesis and with the documentation: one `jars/<jar>/…` store, the descriptor
   keys (`mainClass`, `mainModule`, `classpath`, `modulepath`, `agentClass`, `addExports`, `addOpens`,
   `addReads`, `signature.<dep>`, `layer.<declaring module>.<name>`) and the manifest attributes.
-  A change to any of them is made together with the build tool and the documentation.
+  A change to any of them is made together with the build tool and the documentation. The descriptor
+  stays a properties file, unlike the build tool's `bundle` target, whose descriptor is a Java argument
+  file: a bundle is handed to `java` as a command line, while this jar is read in process and carries
+  keys (`signature.<dep>` above all) that no command line expresses.
 - Every path is spelled out. A jar is on the class path, the module path or in a layer because the
   descriptor names it there, never because of the folder it sits in, and a name the store does not hold is
   refused rather than skipped. One jar may be named by several paths, which is what lets a layer and the
