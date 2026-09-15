@@ -5,15 +5,17 @@ import module java.base;
 /**
  * The on-demand view of an executable jar produced by Jenesis.
  *
- * <p>The bundling step explodes each dependency into its own subfolder of the outer jar, so every class
+ * <p>The bundling step explodes each dependency into its own subfolder of the one store, so every class
  * and resource is a <em>direct</em> entry:</p>
  * <pre>
  *   foo.jar
- *   |- application.properties     (mainClass=..., mainModule=..., agentClass=...)
+ *   |- application.properties     (mainClass=..., classpath=..., modulepath=..., layer.&lt;module&gt;.&lt;name&gt;=...)
  *   |- build/jenesis/launcher/... (this launcher, shaded into the jar root)
- *   |- classpath/&lt;dep&gt;/...        (a non-modular dependency, exploded)
- *   '- modulepath/&lt;mod&gt;/...        (a modular or automatic dependency, exploded)
+ *   '- jars/&lt;dep&gt;/...             (a dependency, exploded; what it is for the descriptor names)
  * </pre>
+ *
+ * <p>A jar is stored once and may be named by more than one path, which is how a layer and the application
+ * share a dependency without a second copy of it.</p>
  *
  * <p>Because each entry is addressable on its own, the launcher reads class and resource bytes straight
  * from the still-open outer jar (or the exploded directory) on demand and keeps only a name index in
@@ -23,8 +25,23 @@ import module java.base;
 final class Archive implements Closeable {
 
     static final String APPLICATION = "application.properties";
-    static final String CLASS_PATH = "classpath/";
-    static final String MODULE_PATH = "modulepath/";
+    /** The one store a bundle keeps its dependencies in; what each path holds is named, not placed. */
+    static final String JARS = "jars/";
+    /**
+     * {@code application.properties} key prefixes naming what a layer holds on each of its two paths, by
+     * file name. A layer is a module graph like any other, so it splits the same way the application does:
+     * what carries a module identity is resolved, and the rest is the unnamed module of the layer's own
+     * loader. Which jar goes where is decided by the build and named here, never re-derived at run time.
+     *
+     * <p>A layer's path is the application's own key qualified by the layer's name: {@code classpath} is
+     * the application's and {@code classpath.render} is the layer {@code render}'s. A layer is named on its
+     * own, not under the module that declared it. That is what the build
+     * already keys it by - the {@code layer:<name>} dependency group it resolves in, and the pins written
+     * against that group - so a name is global and a duplicate is refused there. Keying it here by the
+     * declaring module instead would have required the caller to be a named module, which a jar cannot
+     * promise: whoever consumes it decides whether it lands on the module path or the class path.</p>
+     */
+    static final String LAYER_MODULE_PATH = "modulepath.", LAYER_CLASS_PATH = "classpath.";
 
     /** Reads bytes and openable URLs for entries of the outer jar or directory, on demand. */
     interface Source extends Closeable {
@@ -47,7 +64,7 @@ final class Archive implements Closeable {
     }
 
     /**
-     * A dependency exploded under {@code classpath/<name>/} or {@code modulepath/<name>/}. {@code name} is
+     * A dependency exploded under {@code jars/<name>/}. {@code name} is
      * the original jar file name (so automatic-module naming is unchanged); {@link #names()} are its entry
      * names with that prefix stripped, presented in the multi-release view. Bytes and URLs are fetched from
      * the {@link Source} lazily.
@@ -130,8 +147,10 @@ final class Archive implements Closeable {
     }
 
     private final Properties application = new Properties();
+    private final List<Jar> stored = new ArrayList<>();
     private final List<Jar> classpath = new ArrayList<>();
     private final List<Jar> modulepath = new ArrayList<>();
+    private final Map<String, Layer> layers = new LinkedHashMap<>();
     private Source source;
 
     static Archive load(Path location) throws IOException {
@@ -141,33 +160,8 @@ final class Archive implements Closeable {
         Archive archive = new Archive();
         archive.source = source;
         archive.index(source);
-        // Class-path "first wins", so order matters: honour the declared order from the optional `classpath`
-        // property (comma-separated dependency names), falling back to the dependency name for anything it
-        // does not list. The module path is a set, so its name order is only a deterministic tie-break.
-        order(archive.classpath, archive.application.getProperty("classpath"));
-        archive.modulepath.sort(Comparator.comparing(Jar::name));
+        archive.bind();
         return archive;
-    }
-
-    /**
-     * Orders {@code jars} by the declared comma-separated dependency names in {@code declared} (the original
-     * class-path order), with any jar it does not name following in dependency-name order. With no
-     * declaration the order is purely the dependency name - deterministic, but not the original class path.
-     */
-    private static void order(List<Jar> jars, String declared) {
-        if (declared == null || declared.isBlank()) {
-            jars.sort(Comparator.comparing(Jar::name));
-            return;
-        }
-        Map<String, Integer> position = new HashMap<>();
-        for (String name : declared.split(",")) {
-            String trimmed = name.strip();
-            if (!trimmed.isEmpty()) {
-                position.putIfAbsent(trimmed, position.size());
-            }
-        }
-        jars.sort(Comparator.<Jar>comparingInt(jar -> position.getOrDefault(jar.name(), Integer.MAX_VALUE))
-                .thenComparing(Jar::name));
     }
 
     Properties application() {
@@ -180,6 +174,20 @@ final class Archive implements Closeable {
 
     List<Jar> modulepath() {
         return modulepath;
+    }
+
+    /** What one layer holds: the modules it resolves, and the jars that are its unnamed module. */
+    record Layer(List<Jar> modulepath, List<Jar> classpath) {
+    }
+
+    /**
+     * The bundled module layers, each keyed {@code <declaring module>.<name>}. A layer's jars are stored
+     * among the application's and told apart by the declaration alone, which is what keeps them off the
+     * application's paths - two versions of one module are the point of a layer, and one configuration
+     * cannot hold both.
+     */
+    Map<String, Layer> layers() {
+        return layers;
     }
 
     /**
@@ -198,14 +206,79 @@ final class Archive implements Closeable {
         if (properties != null) {
             application.load(new ByteArrayInputStream(properties));
         }
-        Map<String, List<String>> classpathGroups = new LinkedHashMap<>();
-        Map<String, List<String>> modulepathGroups = new LinkedHashMap<>();
+        Map<String, List<String>> groups = new LinkedHashMap<>();
         for (String entry : source.names()) {
-            group(entry, CLASS_PATH, classpathGroups);
-            group(entry, MODULE_PATH, modulepathGroups);
+            group(entry, JARS, groups);
         }
-        collect(classpathGroups, CLASS_PATH, source, classpath);
-        collect(modulepathGroups, MODULE_PATH, source, modulepath);
+        collect(groups, JARS, source, stored);
+    }
+
+    /**
+     * Resolves each {@code layer.<module>.<name>} declaration against the dependencies already indexed. A
+     * layer's modules are bundled among the application's rather than beside them, so a jar both of them
+     * need is stored once and simply loaded twice; the declaration is what tells them apart.
+     */
+    private void bind() {
+        Map<String, Jar> byName = new LinkedHashMap<>();
+        stored.forEach(jar -> byName.putIfAbsent(jar.name(), jar));
+        select(byName, application.getProperty("classpath"), classpath, "classpath");
+        select(byName, application.getProperty("modulepath"), modulepath, "modulepath");
+        Map<String, List<Jar>> modules = new LinkedHashMap<>(), classes = new LinkedHashMap<>();
+        for (String key : application.stringPropertyNames()) {
+            Map<String, List<Jar>> target;
+            String prefix;
+            if (key.startsWith(LAYER_MODULE_PATH)) {
+                target = modules;
+                prefix = LAYER_MODULE_PATH;
+            } else if (key.startsWith(LAYER_CLASS_PATH)) {
+                target = classes;
+                prefix = LAYER_CLASS_PATH;
+            } else {
+                continue;
+            }
+            List<Jar> jars = new ArrayList<>();
+            select(byName, application.getProperty(key), jars, key);
+            target.put(key.substring(prefix.length()), jars);
+        }
+        Set<String> names = new LinkedHashSet<>(modules.keySet());
+        names.addAll(classes.keySet());
+        for (String name : names) {
+            layers.put(name, new Layer(
+                    modules.getOrDefault(name, List.of()),
+                    classes.getOrDefault(name, List.of())));
+        }
+        // What is read is named and nothing else is, so a descriptor that names nothing reads nothing. Said
+        // here, that is one sentence; left to the launch, it is a ClassNotFoundException for the main class,
+        // which blames the application for a bundle that never offered it anything to load.
+        if (!stored.isEmpty() && classpath.isEmpty() && modulepath.isEmpty() && layers.isEmpty()) {
+            throw new IllegalStateException("This bundle holds " + stored.size()
+                    + " jars and names none of them: classpath, modulepath and layer.* are all absent,"
+                    + " and a path is read because the descriptor names it");
+        }
+    }
+
+    /**
+     * Resolves a declared comma-separated list of dependency names against the store, in the order it was
+     * declared - which is the class path's order, and a deterministic one everywhere else. A name the store
+     * does not hold is refused rather than skipped: a path that silently loses an entry fails later and
+     * somewhere else.
+     */
+    private static void select(Map<String, Jar> byName, String declaration, List<Jar> target, String origin) {
+        if (declaration == null || declaration.isBlank()) {
+            return;
+        }
+        for (String name : declaration.split(",")) {
+            String trimmed = name.strip();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            Jar jar = byName.get(trimmed);
+            if (jar == null) {
+                throw new IllegalStateException(origin + " names " + trimmed
+                        + ", which this bundle does not hold");
+            }
+            target.add(jar);
+        }
     }
 
     private static void group(String entry, String prefix, Map<String, List<String>> groups) {
@@ -415,13 +488,11 @@ final class Archive implements Closeable {
             if (Files.isRegularFile(root.resolve(APPLICATION))) {
                 names.add(APPLICATION);
             }
-            for (String prefix : List.of(CLASS_PATH, MODULE_PATH)) {
-                Path base = root.resolve(prefix);
-                if (Files.isDirectory(base)) {
-                    try (Stream<Path> files = Files.walk(base)) {
-                        files.filter(Files::isRegularFile).forEach(file -> names.add(
-                                prefix + base.relativize(file).toString().replace(File.separatorChar, '/')));
-                    }
+            Path base = root.resolve(JARS);
+            if (Files.isDirectory(base)) {
+                try (Stream<Path> files = Files.walk(base)) {
+                    files.filter(Files::isRegularFile).forEach(file -> names.add(
+                            JARS + base.relativize(file).toString().replace(File.separatorChar, '/')));
                 }
             }
             return names;
