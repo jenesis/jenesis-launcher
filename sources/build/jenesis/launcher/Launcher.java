@@ -107,8 +107,12 @@ public final class Launcher {
             java.lang.module.Configuration configuration = parent.configuration()
                     .resolveAndBind(finder, ModuleFinder.of(), finder.moduleNames());
             verify(name, configuration);
-            ClassLoader loader = new InMemoryClassLoader(archive, bundled.classpath(), finder,
-                    caller.getClassLoader());
+            // Parented on the platform loader, as the file-based layer above is: what this layer may
+            // reach of the caller is what the caller's modules export to it, which the loader is told
+            // rather than left to find by delegating up a chain that also holds the caller's class path.
+            InMemoryClassLoader loader = new InMemoryClassLoader(archive, bundled.classpath(), finder,
+                    ClassLoader.getPlatformClassLoader());
+            loader.remote(configuration, List.of(parent));
             return ModuleLayer.defineModules(configuration, List.of(parent), _ -> loader).layer();
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to define layer " + name + " for " + module, e);

@@ -43,11 +43,11 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
     private final Map<String, ModuleReader> readers = new LinkedHashMap<>();
     private final Map<String, ProtectionDomain> domains = new ConcurrentHashMap<>();
     private final Map<String, Optional<Manifest>> manifests = new ConcurrentHashMap<>();
-    private final Set<String> shadowed;
+    private final Map<String, ClassLoader> remote = new HashMap<>();
 
     InMemoryClassLoader(Archive archive, InMemoryModuleFinder finder, ClassLoader parent)
             throws IOException {
-        this(archive, archive.classpath(), Set.of(), finder, parent);
+        this(archive, archive.classpath(), finder, parent);
     }
 
     /**
@@ -63,13 +63,7 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
      */
     InMemoryClassLoader(Archive archive, List<Archive.Jar> classpath, InMemoryModuleFinder finder,
                         ClassLoader parent) throws IOException {
-        this(archive, classpath, packages(classpath), finder, parent);
-    }
-
-    private InMemoryClassLoader(Archive archive, List<Archive.Jar> classpath, Set<String> shadowed,
-                                InMemoryModuleFinder finder, ClassLoader parent) throws IOException {
         super("jenesis", parent);
-        this.shadowed = shadowed;
         this.archive = archive;
         this.classpath = classpath;
         if (finder != null) {
@@ -90,6 +84,46 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
     }
 
     /**
+     * Records which loader serves each package a module in {@code parents} exports to this layer, as
+     * {@code jdk.internal.loader.Loader} does for a layer the JDK defines itself. A layer reads the
+     * modules above it through the module graph rather than through the loader chain, so what it can
+     * reach is what those modules export to it, and the API module it shares with its host is the very
+     * class the host holds rather than a second copy of it.
+     */
+    void remote(java.lang.module.Configuration configuration, List<ModuleLayer> parents) {
+        for (ResolvedModule resolved : configuration.modules()) {
+            for (ResolvedModule read : resolved.reads()) {
+                if (read.configuration() == configuration) {
+                    continue;
+                }
+                ClassLoader loader = parents.stream()
+                        .map(parent -> parent.findModule(read.name()))
+                        .flatMap(Optional::stream)
+                        .findFirst()
+                        .map(Module::getClassLoader)
+                        .orElse(null);
+                if (loader == null) {
+                    // A module defined to the boot loader is reached through the platform loader, which
+                    // is the substitute the JDK makes for it here as well.
+                    loader = ClassLoader.getPlatformClassLoader();
+                }
+                ModuleDescriptor descriptor = read.reference().descriptor();
+                if (descriptor.isAutomatic()) {
+                    for (String packageName : descriptor.packages()) {
+                        remote.putIfAbsent(packageName, loader);
+                    }
+                } else {
+                    for (ModuleDescriptor.Exports exports : descriptor.exports()) {
+                        if (!exports.isQualified() || exports.targets().contains(resolved.name())) {
+                            remote.putIfAbsent(exports.source(), loader);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
      * Resolves a class whose package a bundled module owns against that module first, and delegates
      * everything else to the parent as usual. The JDK's own layer loader
      * ({@code jdk.internal.loader.Loader}) does the same, and it is what makes
@@ -101,7 +135,8 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
      */
     @Override
     protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
-        if (packageToModule.containsKey(packageOf(name)) || shadowed.contains(packageOf(name))) {
+        String packageName = packageOf(name);
+        if (packageToModule.containsKey(packageName)) {
             synchronized (getClassLoadingLock(name)) {
                 Class<?> loaded = findLoadedClass(name);
                 if (loaded == null) {
@@ -113,21 +148,24 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
                 return loaded;
             }
         }
-        return super.loadClass(name, resolve);
-    }
-
-    /** The packages a layer's class path carries, which its loader therefore serves before its parent. */
-    private static Set<String> packages(List<Archive.Jar> classpath) {
-        Set<String> packages = new HashSet<>();
-        for (Archive.Jar jar : classpath) {
-            for (String entry : jar.names()) {
-                int slash = entry.lastIndexOf('/');
-                if (slash > 0 && entry.endsWith(".class")) {
-                    packages.add(entry.substring(0, slash).replace('/', '.'));
+        // A package another layer exports to this one is loaded by that layer's own loader, so the class
+        // is the very one the module above holds rather than a second copy of it. Delegating up the loader
+        // chain instead would reach further than the module graph allows - every class that loader can
+        // see, exported or not, its own class path included.
+        ClassLoader loader = remote.get(packageName);
+        if (loader != null) {
+            synchronized (getClassLoadingLock(name)) {
+                Class<?> loaded = findLoadedClass(name);
+                if (loaded == null) {
+                    loaded = loader.loadClass(name);
                 }
+                if (resolve) {
+                    resolveClass(loaded);
+                }
+                return loaded;
             }
         }
-        return packages;
+        return super.loadClass(name, resolve);
     }
 
     @Override

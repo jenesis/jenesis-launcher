@@ -53,10 +53,11 @@ covers what it does, the tests and releasing. The user documentation is
   re-derived here. A layer on disk is read from its files, by a `ModuleFinder` over its module path and a
   `URLClassLoader` over its class path, exactly as `java -p … -cp …` reads one; reading jars out of memory
   is for the single case that has no file to name, a layer travelling inside an executable jar. Either way
-  the caller's own class path is off the layer's chain - the file-based loader is parented on the platform
-  loader, and the bundled loader, which must reach the caller for the API module's classes, serves its own
-  class path before delegating there. A layer exists to hide the version the caller holds, so its unnamed
-  module is its own rather than a view onto the application's.
+  the layer is parented on the platform loader and reads the modules above it through the module graph
+  rather than the loader chain: `InMemoryClassLoader` is told which loader serves each package a parent
+  layer exports to it, as `jdk.internal.loader.Loader` is, so the API module it shares is the very class
+  the host holds while everything the host does not export - its class path above all - stays out of
+  reach. A layer exists to hide the version the caller holds, so its unnamed module is its own.
   `Launcher.layer`/`Launcher.load` define it on demand, as a child of the caller's layer, so every module
   the layer does not itself hold - the API module it shares with the caller above all - resolves from the
   caller and is the same class on both sides. Which module calls decides whose layer a name means, so two

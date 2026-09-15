@@ -1195,6 +1195,37 @@ class LauncherTest {
     }
 
     @Test
+    void doesNotReachTheApplicationsClassPathFromABundledLayer() throws Exception {
+        // A layer reads the modules above it through the module graph, not through the loader chain, so
+        // what it can reach of the caller is what the caller's modules export to it. The application's
+        // class path is not behind a layer, and a layer that holds no class path of its own has none.
+        Path bundle = directory.resolve("layer-no-tail.jar");
+        String key = "jenesis.test.layer.unreachable";
+        byte[] provider = TestJars.jar(Map.of(
+                "META-INF/MANIFEST.MF", TestJars.manifest("Automatic-Module-Name", "demo.provider"),
+                "META-INF/services/demo.spi.Contract", "demo.provider.Impl".getBytes(StandardCharsets.UTF_8),
+                "demo/provider/Impl.class", TestJars.serviceProvider(
+                        "demo.provider.Impl", "demo.spi.Contract", "demo.lib.Value", key)));
+        Map<String, byte[]> host = layerFixture();
+        host.put("lib-host.jar", TestJars.classJar("demo.lib.Value", TestJars.runner("demo.lib.Value", "host")));
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main",
+                        "modulepath", "spi.jar,host.jar",
+                        "classpath", "lib-host.jar",
+                        "layer.modulepath.demo.host.render", "provider.jar"),
+                Map.of(),
+                host,
+                Map.of("demo.host.render", Map.of("provider.jar", provider)));
+
+        System.clearProperty(key);
+        assertThatThrownBy(() -> launch(bundle, "jenesis.test.layer.unreachable.provider"))
+                .hasStackTraceContaining("demo.lib.Value");
+        assertThat(System.getProperty(key))
+                .as("the host's copy is not the layer's to load, so nothing ran")
+                .isNull();
+    }
+
+    @Test
     void readsAFileLayersClassPathAsFilesRatherThanFromMemory() throws Exception {
         // On disk a layer is read the way `java -p … -cp …` reads one: a ModuleFinder over its module path
         // and a URLClassLoader over its class path. The caller's class path is not on that chain, so the
