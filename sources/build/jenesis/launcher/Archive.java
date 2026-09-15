@@ -247,6 +247,14 @@ final class Archive implements Closeable {
                     modules.getOrDefault(name, List.of()),
                     classes.getOrDefault(name, List.of())));
         }
+        // What is read is named and nothing else is, so a descriptor that names nothing reads nothing. Said
+        // here, that is one sentence; left to the launch, it is a ClassNotFoundException for the main class,
+        // which blames the application for a bundle that never offered it anything to load.
+        if (!stored.isEmpty() && classpath.isEmpty() && modulepath.isEmpty() && layers.isEmpty()) {
+            throw new IllegalStateException("This bundle holds " + stored.size()
+                    + " jars and names none of them: classpath, modulepath and layer.* are all absent,"
+                    + " and a path is read because the descriptor names it");
+        }
     }
 
     /**

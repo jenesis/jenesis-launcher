@@ -1171,6 +1171,21 @@ class LauncherTest {
     }
 
     @Test
+    void refusesABundleThatNamesNoneOfItsJars() throws Exception {
+        // Every path is named and nothing else is read, so a descriptor naming nothing reads nothing. Left
+        // to the launch that is a ClassNotFoundException for the main class, which blames the application.
+        Path bundle = directory.resolve("unnamed-jars.jar");
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("application.properties", properties(Map.of("mainClass", "demo.sig.Main")));
+        entries.put("jars/app.jar/demo/sig/Main.class", TestJars.setPropertyMain("demo.sig.Main"));
+        Files.write(bundle, TestJars.jar(entries));
+
+        assertThatThrownBy(() -> launch(bundle, "jenesis.test.unnamed"))
+                .hasStackTraceContaining("holds 1 jars and names none of them")
+                .hasStackTraceContaining("classpath, modulepath and layer.* are all absent");
+    }
+
+    @Test
     void reachesALayerFromAClassPathCaller() throws Exception {
         // A jar cannot promise that its classes run as a named module: whoever consumes it decides whether
         // it lands on the module path or the class path. A layer is named on its own for that reason, so a
