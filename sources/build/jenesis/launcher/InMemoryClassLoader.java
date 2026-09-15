@@ -51,10 +51,11 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
     }
 
     /**
-     * A layer's loader, over an explicit class path rather than the archive's own, and over no archive at
-     * all when the layer was supplied as loose files. A layer is a module graph like any other and splits
-     * the same way: what carries a module identity is resolved, and the rest is this loader's unnamed
-     * module, which the layer's automatic modules read as they would on a real {@code -cp}.
+     * A layer's loader, over an explicit class path rather than the archive's own. A layer is a module
+     * graph like any other and splits the same way: what carries a module identity is resolved, and the
+     * rest is this loader's unnamed module, which the layer's automatic modules read as they would on a
+     * real {@code -cp}. This is for a layer bundled inside the jar, which has no file to name; a layer on
+     * disk is read from its files by the JDK's own finder and loader.
      *
      * <p>Unlike the application's loader, a layer's class path shadows the parent rather than deferring to
      * it. The parent here is the caller's own loader, which is where the version the layer exists to hide
@@ -230,8 +231,7 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
      * the bundled bytes. The Base64 value is ASCII, so it round-trips through the ISO-8859-1 properties file.
      */
     private CodeSigner[] signers(String name) {
-        // A layer read from loose files has no descriptor to attest a signer, so it reconstructs none.
-        String encoded = archive == null ? null : archive.application().getProperty(SIGNATURE_PREFIX + name);
+        String encoded = archive.application().getProperty(SIGNATURE_PREFIX + name);
         if (encoded == null || encoded.isBlank()) {
             return null;
         }
@@ -458,8 +458,6 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
      */
     @Override
     public void close() throws IOException {
-        if (archive != null) {
-            archive.close();
-        }
+        archive.close();
     }
 }

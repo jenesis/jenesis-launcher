@@ -75,8 +75,9 @@ no overload that takes one. Which module calls decides whose layer a name means,
 declare `render` without colliding.
 
 Outside a bundle - a deployment that unpacked its dependencies - `jenesis.layer.modulepath.<module>.<name>`
-and `jenesis.layer.classpath.<module>.<name>` name the layer's two paths instead, jar by jar. A layer read
-that way is built from the same view as a bundled one, so the same code runs either way.
+and `jenesis.layer.classpath.<module>.<name>` name the layer's two paths instead, jar by jar. A layer on
+disk is read from those files the way `java -p … -cp …` reads any module graph; the in-memory reading above
+is only for the case that has no files to name. The same code runs either way.
 
 Nesting needs nothing further: `Launcher.layer` parents a layer on its *caller's*, so a module sitting
 inside one layer that asks for another gets a child of the first, and the API module it shares resolves

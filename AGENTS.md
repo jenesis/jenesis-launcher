@@ -50,10 +50,13 @@ covers what it does, the tests and releasing. The user documentation is
   it exists to isolate are the ones whose trees are mostly jars with no module identity. What is named is
   resolved; the rest is the unnamed module of the layer's own loader, which the layer's automatic modules
   read as they would on a real `-cp`. The split is decided by the build and named in the descriptor, never
-  re-derived here. Unlike the application's loader, a layer's loader serves its own class path **before**
-  its parent: the parent is the caller, which holds the very version the layer exists to hide, so deferring
-  to it would hand that version back. A layer read from loose files is built from the same `Archive.Jar`
-  view as a bundled one, so both paths are one mechanism rather than two that can drift.
+  re-derived here. A layer on disk is read from its files, by a `ModuleFinder` over its module path and a
+  `URLClassLoader` over its class path, exactly as `java -p … -cp …` reads one; reading jars out of memory
+  is for the single case that has no file to name, a layer travelling inside an executable jar. Either way
+  the caller's own class path is off the layer's chain - the file-based loader is parented on the platform
+  loader, and the bundled loader, which must reach the caller for the API module's classes, serves its own
+  class path before delegating there. A layer exists to hide the version the caller holds, so its unnamed
+  module is its own rather than a view onto the application's.
   `Launcher.layer`/`Launcher.load` define it on demand, as a child of the caller's layer, so every module
   the layer does not itself hold - the API module it shares with the caller above all - resolves from the
   caller and is the same class on both sides. Which module calls decides whose layer a name means, so two

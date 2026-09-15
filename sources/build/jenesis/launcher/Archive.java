@@ -183,27 +183,6 @@ final class Archive implements Closeable {
     }
 
     /**
-     * Reads loose jar files as bundled ones, so a layer supplied as a path list is served exactly like a
-     * bundled layer: the same multi-release view, the same code sources, the same loader.
-     */
-    static List<Jar> jars(List<Path> files) throws IOException {
-        List<Jar> jars = new ArrayList<>();
-        for (Path file : files) {
-            if (!Files.isRegularFile(file)) {
-                throw new IllegalStateException(file + " is not a jar file - a path names the jars it holds,"
-                        + " one by one, rather than a folder whose content decides what is read");
-            }
-            Source source = new ZipSource(file);
-            List<String> names = new ArrayList<>(source.names());
-            int[] versions = multiReleaseVersions(names, source, "");
-            List<String> effective = effectiveNames(names, versions);
-            effective.sort(Comparator.naturalOrder());
-            jars.add(new Jar(file.getFileName().toString(), "", effective, versions, source));
-        }
-        return jars;
-    }
-
-    /**
      * Closes the underlying jar (or directory) handle. The loader keeps it open to read classes and
      * resources on demand for as long as the application runs, so this is for the paths that load an archive
      * but build no loader from it, and for embedders that discard a loader; afterwards the archive's jars

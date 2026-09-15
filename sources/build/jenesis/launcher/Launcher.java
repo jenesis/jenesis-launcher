@@ -85,22 +85,30 @@ public final class Launcher {
             Archive.Layer bundled = archive == null
                     ? null
                     : archive.layers().get(module.getName() + "." + name);
-            // A layer bundled in the jar and one handed over as paths are the same graph read from two
-            // places, so they are built the same way rather than by two mechanisms that can drift.
-            List<Archive.Jar> modulepath, classpath;
             if (bundled == null) {
-                archive = null;
-                modulepath = Archive.jars(paths(module, name, Archive.LAYER_MODULE_PATH));
-                classpath = Archive.jars(paths(module, name, Archive.LAYER_CLASS_PATH));
-            } else {
-                modulepath = bundled.modulepath();
-                classpath = bundled.classpath();
+                // The layer's jars are files, so they are read as files: a ModuleFinder over its module
+                // path and a URLClassLoader over its class path, which is what `java -p … -cp …` does.
+                // Reading a jar out of memory is for the one case that has no file to name - a layer that
+                // travels inside an executable jar - and is not how a layer is read when it is on disk.
+                List<Path> modulepath = paths(module, name, Archive.LAYER_MODULE_PATH);
+                ModuleFinder finder = ModuleFinder.of(modulepath.toArray(Path[]::new));
+                java.lang.module.Configuration configuration = parent.configuration().resolveAndBind(
+                        finder,
+                        ModuleFinder.of(),
+                        finder.findAll()
+                                .stream()
+                                .map(reference -> reference.descriptor().name())
+                                .collect(Collectors.toUnmodifiableSet()));
+                verify(name, configuration);
+                return ModuleLayer.defineModulesWithOneLoader(configuration, List.of(parent),
+                        unnamed(paths(module, name, Archive.LAYER_CLASS_PATH))).layer();
             }
-            InMemoryModuleFinder finder = new InMemoryModuleFinder(modulepath);
+            InMemoryModuleFinder finder = new InMemoryModuleFinder(bundled.modulepath());
             java.lang.module.Configuration configuration = parent.configuration()
                     .resolveAndBind(finder, ModuleFinder.of(), finder.moduleNames());
             verify(name, configuration);
-            ClassLoader loader = new InMemoryClassLoader(archive, classpath, finder, caller.getClassLoader());
+            ClassLoader loader = new InMemoryClassLoader(archive, bundled.classpath(), finder,
+                    caller.getClassLoader());
             return ModuleLayer.defineModules(configuration, List.of(parent), _ -> loader).layer();
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to define layer " + name + " for " + module, e);
@@ -126,6 +134,26 @@ public final class Launcher {
                 }
             }
         }
+    }
+
+    /**
+     * The loader a file-based layer's class path is read by, and the platform loader when it has none. The
+     * caller's own class path is deliberately not on this chain: a layer exists to hide the version the
+     * caller holds, so its unnamed module is its own rather than a view onto the application's.
+     */
+    private static ClassLoader unnamed(List<Path> classpath) {
+        if (classpath.isEmpty()) {
+            return ClassLoader.getPlatformClassLoader();
+        }
+        URL[] urls = new URL[classpath.size()];
+        for (int index = 0; index < urls.length; index++) {
+            try {
+                urls[index] = classpath.get(index).toUri().toURL();
+            } catch (MalformedURLException e) {
+                throw new IllegalStateException("Failed to build a URL for " + classpath.get(index), e);
+            }
+        }
+        return new URLClassLoader("jenesis-layer", urls, ClassLoader.getPlatformClassLoader());
     }
 
     /**

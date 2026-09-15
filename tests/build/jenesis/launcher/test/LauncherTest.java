@@ -1195,6 +1195,44 @@ class LauncherTest {
     }
 
     @Test
+    void readsAFileLayersClassPathAsFilesRatherThanFromMemory() throws Exception {
+        // On disk a layer is read the way `java -p … -cp …` reads one: a ModuleFinder over its module path
+        // and a URLClassLoader over its class path. The caller's class path is not on that chain, so the
+        // host's copy of a class the layer also holds cannot reach it.
+        Path bundle = directory.resolve("file-layer.jar");
+        String key = "jenesis.test.layer.files";
+        Map<String, byte[]> host = layerFixture();
+        host.put("lib-host.jar", TestJars.classJar("demo.lib.Value", TestJars.runner("demo.lib.Value", "host")));
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main",
+                        "modulepath", "spi.jar,host.jar",
+                        "classpath", "lib-host.jar"),
+                Map.of(),
+                host);
+        Path folder = Files.createDirectory(directory.resolve("render-files"));
+        Path provider = folder.resolve("provider.jar"), library = folder.resolve("lib-layer.jar");
+        Files.write(provider, TestJars.jar(Map.of(
+                "META-INF/MANIFEST.MF", TestJars.manifest("Automatic-Module-Name", "demo.provider"),
+                "META-INF/services/demo.spi.Contract", "demo.provider.Impl".getBytes(StandardCharsets.UTF_8),
+                "demo/provider/Impl.class", TestJars.serviceProvider(
+                        "demo.provider.Impl", "demo.spi.Contract", "demo.lib.Value", key))));
+        Files.write(library, TestJars.classJar("demo.lib.Value", TestJars.runner("demo.lib.Value", "layer")));
+
+        System.clearProperty(key);
+        System.setProperty("jenesis.layer.modulepath.demo.host.render", provider.toString());
+        System.setProperty("jenesis.layer.classpath.demo.host.render", library.toString());
+        try {
+            launch(bundle, "jenesis.test.layer.files.provider");
+            assertThat(System.getProperty(key))
+                    .as("the layer reads its own class path off disk, not the host's copy of the class")
+                    .isEqualTo("layer");
+        } finally {
+            System.clearProperty("jenesis.layer.modulepath.demo.host.render");
+            System.clearProperty("jenesis.layer.classpath.demo.host.render");
+        }
+    }
+
+    @Test
     void scopesALayerNameToTheModuleThatDeclaredIt() throws Exception {
         Path bundle = directory.resolve("scoped.jar");
         Map<String, byte[]> modules = new LinkedHashMap<>(layerFixture());
