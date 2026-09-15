@@ -11,7 +11,8 @@ and run as its `Main-Class`, so `java -jar foo.jar` starts the application - whi
 resolved into a fresh `java.lang.ModuleLayer` and non-modular ones become the unnamed module of the same
 loader. Each dependency is exploded into its own subfolder of the outer jar, and class and resource bytes are
 read straight from the still-open jar on demand: nothing is merged into a flat jar or held in memory, and
-only native libraries are ever extracted to disk.
+only what the JVM can read no other way - a native library, and the jars of a bundled module layer - is ever
+extracted to disk.
 
 📖 **The user documentation lives at [jenesis.build/launcher](https://jenesis.build/launcher/).** How a
 launch proceeds, the jar layout, bundled agents, module-access grants, troubleshooting, and the full
@@ -36,6 +37,34 @@ java -javaagent:foo.jar=args -jar app.jar   # a hand-assembled jar with no mainC
 
 The build tool writes `mainClass`, `mainModule` and `classpath` into the jar's `application.properties`; the
 agent, module-access and signer keys the launcher also understands are for jars assembled by other means.
+
+## Bundled module layers
+
+A project can isolate a dependency and its closure in a run-time `ModuleLayer` of its own, so two versions of
+one library coexist without relocating a package. Those jars travel under `layers/<name>/` and are stored
+**whole** rather than exploded: a layer is read back as a module path, where an automatic module takes its
+name from its jar file name and a signed jar is only verifiable intact.
+
+Before `main`, the launcher unpacks each one and announces it as `jenesis.layer.<name>`:
+
+```
+foo.jar
+|- application.properties
+|- build/jenesis/launcher/...
+|- modulepath/<mod>/...          each dependency, exploded
+'- layers/render/isolated.jar    each layer's jars, whole
+```
+
+```java
+ModuleFinder finder = ModuleFinder.of(Path.of(System.getProperty("jenesis.layer.render")));
+```
+
+That is the same property a filesystem deployment is launched with, so the application's own layer code is
+identical wherever it runs and needs nothing from this launcher. A module path can only be read from files -
+`ModuleFinder.of` takes paths, not streams - which is why a layer inside the jar is written to a temporary
+directory, for the same reason a native library is. An exploded bundle already is a directory, so its layers
+are read where they lie and nothing is copied, and a layer an explicit `-D` already points at is left alone,
+which is what lets one be patched in place.
 
 ## Building it
 

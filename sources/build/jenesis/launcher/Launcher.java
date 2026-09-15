@@ -28,6 +28,8 @@ import module java.instrument;
  */
 public final class Launcher {
 
+    private static final String LAYER = "jenesis.layer.";
+
     private Launcher() {
     }
 
@@ -47,6 +49,7 @@ public final class Launcher {
             throw new IllegalStateException("No 'mainClass' declared in " + Archive.APPLICATION
                     + " of " + location);
         }
+        materialize(archive);
         InMemoryClassLoader loader = prepare(archive);
         Thread.currentThread().setContextClassLoader(loader);
         // Run agents before the main class is loaded, mirroring `-javaagent`: a ClassFileTransformer a
@@ -73,6 +76,7 @@ public final class Launcher {
             archive.close();
             return;
         }
+        materialize(archive);
         InMemoryClassLoader loader = prepare(archive);
         // Set the context loader only while the agents start, then restore it: the host application keeps
         // running on this thread afterwards and must not inherit the bundle's loader.
@@ -96,6 +100,46 @@ public final class Launcher {
     public static void runAgents(Class<?> premainClass, boolean attach, String arguments,
                                  Instrumentation instrumentation) throws Exception {
         runAgents(location(premainClass), attach, arguments, instrumentation);
+    }
+
+    /**
+     * Unpacks every bundled layer and announces it as {@code jenesis.layer.<name>} - the same property a
+     * filesystem deployment is launched with, so an application's own layer code is identical wherever it
+     * runs and needs nothing from this launcher.
+     *
+     * <p>A layer is a module path, and a module path can only be read from files: {@link ModuleFinder#of}
+     * takes paths, not streams. A layer bundled inside the jar is therefore written to a temporary directory
+     * for the same reason a native library is - the JVM offers no other way in. An exploded bundle already
+     * is a directory, so its layers are read where they lie and nothing is copied, and a layer the caller
+     * has already pointed somewhere with an explicit {@code -D} is left alone.</p>
+     */
+    private static void materialize(Archive archive) throws IOException {
+        Path root = null;
+        for (Map.Entry<String, List<String>> layer : archive.layers().entrySet()) {
+            String property = LAYER + layer.getKey();
+            if (System.getProperty(property) != null) {
+                continue;
+            }
+            Path folder;
+            if (Files.isDirectory(archive.location())) {
+                folder = archive.location().resolve(Archive.LAYERS).resolve(layer.getKey());
+            } else {
+                if (root == null) {
+                    root = Files.createTempDirectory("jenesis-layer-");
+                    root.toFile().deleteOnExit();
+                }
+                folder = Files.createDirectory(root.resolve(layer.getKey()));
+                folder.toFile().deleteOnExit();
+                for (String entry : layer.getValue()) {
+                    Path jar = folder.resolve(entry.substring(entry.lastIndexOf('/') + 1));
+                    try (InputStream in = archive.stream(entry)) {
+                        Files.copy(in, jar);
+                    }
+                    jar.toFile().deleteOnExit();
+                }
+            }
+            System.setProperty(property, folder.toString());
+        }
     }
 
     /**

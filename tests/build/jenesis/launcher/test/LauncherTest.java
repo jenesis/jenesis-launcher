@@ -2,6 +2,8 @@ package build.jenesis.launcher.test;
 
 import module java.base;
 
+import java.lang.module.ModuleFinder;
+
 import java.security.cert.X509Certificate;
 import build.jenesis.launcher.Launcher;
 import org.junit.jupiter.api.Test;
@@ -1015,6 +1017,97 @@ class LauncherTest {
         assertThatThrownBy(() -> launch(bundle))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("mainClass");
+    }
+
+    @Test
+    void announcesABundledLayerAsAReadableModulePath() throws Exception {
+        Path bundle = directory.resolve("layer-app.jar");
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.layer.Main"),
+                Map.of("app.jar", TestJars.classJar("demo.layer.Main",
+                        TestJars.setPropertyMain("demo.layer.Main"))),
+                Map.of(),
+                Map.of("render", Map.of("isolated.jar", TestJars.modularJar("demo.isolated",
+                        "demo.isolated.Service",
+                        TestJars.setPropertyMain("demo.isolated.Service"),
+                        Set.of(),
+                        Set.of("demo.isolated")))));
+
+        String key = "jenesis.test.layer";
+        System.clearProperty(key);
+        System.clearProperty("jenesis.layer.render");
+        launch(bundle, key, "ok");
+
+        Path folder = Path.of(System.getProperty("jenesis.layer.render"));
+        assertThat(folder)
+                .as("a layer inside the jar is unpacked, because a module path can only be read from files")
+                .isDirectory();
+        assertThat(folder.resolve("isolated.jar")).isRegularFile();
+        assertThat(ModuleFinder.of(folder).findAll())
+                .as("the unpacked jar resolves as the module it declares")
+                .singleElement()
+                .satisfies(reference -> assertThat(reference.descriptor().name()).isEqualTo("demo.isolated"));
+    }
+
+    @Test
+    void readsAnExplodedBundlesLayerWhereItLies() throws Exception {
+        Path bundle = directory.resolve("exploded-layer");
+        TestJars.writeDirectory(bundle,
+                Map.of("mainClass", "demo.exploded.Main"),
+                Map.of("app.jar", TestJars.classJar("demo.exploded.Main",
+                        TestJars.setPropertyMain("demo.exploded.Main"))),
+                Map.of(),
+                Map.of("render", Map.of("isolated.jar", TestJars.automaticModuleJar("demo.isolated",
+                        "demo.isolated.Service",
+                        TestJars.setPropertyMain("demo.isolated.Service")))));
+
+        String key = "jenesis.test.exploded.layer";
+        System.clearProperty(key);
+        System.clearProperty("jenesis.layer.render");
+        launch(bundle, key, "ok");
+
+        assertThat(Path.of(System.getProperty("jenesis.layer.render")))
+                .as("an exploded bundle is already a directory, so nothing is copied out of it")
+                .isEqualTo(bundle.resolve("layers").resolve("render"));
+    }
+
+    @Test
+    void leavesALayerAnExplicitPropertyAlreadyPointsAt() throws Exception {
+        Path bundle = directory.resolve("pinned-layer.jar");
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.pinned.Main"),
+                Map.of("app.jar", TestJars.classJar("demo.pinned.Main",
+                        TestJars.setPropertyMain("demo.pinned.Main"))),
+                Map.of(),
+                Map.of("render", Map.of("isolated.jar", TestJars.automaticModuleJar("demo.isolated",
+                        "demo.isolated.Service",
+                        TestJars.setPropertyMain("demo.isolated.Service")))));
+
+        String key = "jenesis.test.pinned.layer";
+        System.clearProperty(key);
+        Path patched = Files.createDirectory(directory.resolve("patched"));
+        System.setProperty("jenesis.layer.render", patched.toString());
+        try {
+            launch(bundle, key, "ok");
+            assertThat(Path.of(System.getProperty("jenesis.layer.render")))
+                    .as("an operator who points a layer somewhere keeps it, so a layer can be patched in place")
+                    .isEqualTo(patched);
+        } finally {
+            System.clearProperty("jenesis.layer.render");
+        }
+    }
+
+    @Test
+    void rejectsALayerEntryThatIsNotAWholeJar() throws Exception {
+        Path bundle = directory.resolve("nested-layer.jar");
+        Files.write(bundle, TestJars.jar(Map.of(
+                "application.properties", "mainClass=demo.nested.Main\n".getBytes(StandardCharsets.UTF_8),
+                "layers/render/nested/isolated.jar", new byte[] {1, 2, 3})));
+
+        assertThatThrownBy(() -> launch(bundle))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("A layer holds whole jars, not a tree of entries")
+                .hasMessageContaining("layers/render/nested/isolated.jar");
     }
 
     private static void launch(Path bundle, String... args) throws Exception {

@@ -26,11 +26,18 @@ covers what it does, the tests and releasing. The user documentation is
   path) are reproduced, not improved on. A behaviour the JDK does not have is not added here.
 - The jar layout and the `application.properties` descriptor are the contract with the build tool's
   `Launcher` step in jenesis/jenesis and with the documentation: `classpath/<jar>/…` and `modulepath/<jar>/…`
-  subfolders, the descriptor keys (`mainClass`, `mainModule`, `classpath`, `agentClass`, `addExports`,
-  `addOpens`, `addReads`, `signature.<dep>`) and the manifest attributes. A change to any of them is made
-  together with the build tool and the documentation.
+  subfolders, `layers/<name>/<jar>`, the descriptor keys (`mainClass`, `mainModule`, `classpath`,
+  `agentClass`, `addExports`, `addOpens`, `addReads`, `signature.<dep>`) and the manifest attributes. A
+  change to any of them is made together with the build tool and the documentation.
+- A dependency is exploded; a layer's jars are stored whole. A layer is read back as a module path, where an
+  automatic module takes its name from its jar file name and a signed jar is only verifiable intact, so
+  exploding one would change what it resolves to. Layers are discovered by scanning `layers/`, the way
+  dependencies are discovered by scanning `classpath/` and `modulepath/`; no descriptor key declares them.
 - Bytes are read from the still-open jar on demand; nothing is merged, held in memory, or extracted, except
-  a native library that the JVM can only load from a file.
+  what the JVM can read no other way: a native library it can only load from a file, and a layer's jars,
+  which `ModuleFinder.of` can only take as paths. Each is announced as `jenesis.layer.<name>`, the property a
+  filesystem deployment is launched with, so an application's layer code is the same everywhere and reaches
+  for nothing here.
 
 ## Tests
 

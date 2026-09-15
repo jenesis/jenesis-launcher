@@ -501,10 +501,25 @@ final class TestJars {
                             Map<String, String> application,
                             Map<String, byte[]> classpath,
                             Map<String, byte[]> modulepath) throws IOException {
+        writeBundle(target, application, classpath, modulepath, Map.of());
+    }
+
+    /**
+     * As {@link #writeBundle(Path, Map, Map, Map)}, with {@code layers} mapping a layer name to the jars it
+     * holds by file name. A layer's jars are stored whole rather than exploded, the way the launcher reads
+     * them back.
+     */
+    static void writeBundle(Path target,
+                            Map<String, String> application,
+                            Map<String, byte[]> classpath,
+                            Map<String, byte[]> modulepath,
+                            Map<String, Map<String, byte[]>> layers) throws IOException {
         Map<String, byte[]> entries = new LinkedHashMap<>();
         entries.put("application.properties", applicationProperties(application));
         explode(entries, "classpath/", classpath);
         explode(entries, "modulepath/", modulepath);
+        layers.forEach((layer, jars) ->
+                jars.forEach((name, bytes) -> entries.put("layers/" + layer + "/" + name, bytes)));
         Files.write(target, jar(entries));
     }
 
@@ -513,10 +528,25 @@ final class TestJars {
                                Map<String, String> application,
                                Map<String, byte[]> classpath,
                                Map<String, byte[]> modulepath) throws IOException {
+        writeDirectory(root, application, classpath, modulepath, Map.of());
+    }
+
+    /** As {@link #writeDirectory(Path, Map, Map, Map)}, with layers written as folders of whole jars. */
+    static void writeDirectory(Path root,
+                               Map<String, String> application,
+                               Map<String, byte[]> classpath,
+                               Map<String, byte[]> modulepath,
+                               Map<String, Map<String, byte[]>> layers) throws IOException {
         Files.createDirectories(root);
         Files.write(root.resolve("application.properties"), applicationProperties(application));
         explodeToDirectory(root.resolve("classpath"), classpath);
         explodeToDirectory(root.resolve("modulepath"), modulepath);
+        for (Map.Entry<String, Map<String, byte[]>> layer : layers.entrySet()) {
+            Path folder = Files.createDirectories(root.resolve("layers").resolve(layer.getKey()));
+            for (Map.Entry<String, byte[]> jar : layer.getValue().entrySet()) {
+                Files.write(folder.resolve(jar.getKey()), jar.getValue());
+            }
+        }
     }
 
     private static byte[] applicationProperties(Map<String, String> application) throws IOException {

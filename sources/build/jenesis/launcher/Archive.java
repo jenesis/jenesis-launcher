@@ -12,7 +12,8 @@ import module java.base;
  *   |- application.properties     (mainClass=..., mainModule=..., agentClass=...)
  *   |- build/jenesis/launcher/... (this launcher, shaded into the jar root)
  *   |- classpath/&lt;dep&gt;/...        (a non-modular dependency, exploded)
- *   '- modulepath/&lt;mod&gt;/...        (a modular or automatic dependency, exploded)
+ *   |- modulepath/&lt;mod&gt;/...        (a modular or automatic dependency, exploded)
+ *   '- layers/&lt;name&gt;/&lt;jar&gt;          (a jar isolated in a run-time layer, stored whole)
  * </pre>
  *
  * <p>Because each entry is addressable on its own, the launcher reads class and resource bytes straight
@@ -25,6 +26,7 @@ final class Archive implements Closeable {
     static final String APPLICATION = "application.properties";
     static final String CLASS_PATH = "classpath/";
     static final String MODULE_PATH = "modulepath/";
+    static final String LAYERS = "layers/";
 
     /** Reads bytes and openable URLs for entries of the outer jar or directory, on demand. */
     interface Source extends Closeable {
@@ -132,6 +134,8 @@ final class Archive implements Closeable {
     private final Properties application = new Properties();
     private final List<Jar> classpath = new ArrayList<>();
     private final List<Jar> modulepath = new ArrayList<>();
+    private final Map<String, List<String>> layers = new LinkedHashMap<>();
+    private Path location;
     private Source source;
 
     static Archive load(Path location) throws IOException {
@@ -139,6 +143,7 @@ final class Archive implements Closeable {
                 ? new DirectorySource(location)
                 : new ZipSource(location);
         Archive archive = new Archive();
+        archive.location = location;
         archive.source = source;
         archive.index(source);
         // Class-path "first wins", so order matters: honour the declared order from the optional `classpath`
@@ -183,6 +188,26 @@ final class Archive implements Closeable {
     }
 
     /**
+     * The bundled layers, each a layer name mapped to the entry names of the jars it holds. Unlike a
+     * dependency, a layer's jars are stored whole: a layer is read back as a module path, where an automatic
+     * module takes its name from its jar file name and a signed jar is only verifiable intact, so exploding
+     * one would change what it resolves to.
+     */
+    Map<String, List<String>> layers() {
+        return layers;
+    }
+
+    /** Where this archive was loaded from - a jar file, or a directory laid out the same way. */
+    Path location() {
+        return location;
+    }
+
+    /** An open stream for a direct entry of the outer jar or directory, or {@code null} if it is absent. */
+    InputStream stream(String entry) throws IOException {
+        return source.stream(entry);
+    }
+
+    /**
      * Closes the underlying jar (or directory) handle. The loader keeps it open to read classes and
      * resources on demand for as long as the application runs, so this is for the paths that load an archive
      * but build no loader from it, and for embedders that discard a loader; afterwards the archive's jars
@@ -203,9 +228,36 @@ final class Archive implements Closeable {
         for (String entry : source.names()) {
             group(entry, CLASS_PATH, classpathGroups);
             group(entry, MODULE_PATH, modulepathGroups);
+            layer(entry);
         }
         collect(classpathGroups, CLASS_PATH, source, classpath);
         collect(modulepathGroups, MODULE_PATH, source, modulepath);
+        layers.values().forEach(jars -> jars.sort(Comparator.naturalOrder()));
+    }
+
+    /**
+     * Indexes {@code layers/<name>/<jar>}. The entry is one jar, not a tree: anything deeper would have to
+     * be reassembled into a jar to be read as a module, so it is refused rather than silently dropped.
+     */
+    private void layer(String entry) {
+        if (!entry.startsWith(LAYERS)) {
+            return;
+        }
+        String rest = entry.substring(LAYERS.length());
+        int slash = rest.indexOf('/');
+        if (slash <= 0 || slash == rest.length() - 1) {
+            return;
+        }
+        String name = rest.substring(0, slash), file = rest.substring(slash + 1);
+        if (file.indexOf('/') != -1) {
+            throw new IllegalStateException("A layer holds whole jars, not a tree of entries: " + entry);
+        }
+        for (String segment : List.of(name, file)) {
+            if (segment.equals(".") || segment.equals("..") || segment.indexOf('\\') != -1) {
+                throw new IllegalStateException("Illegal layer entry: " + entry);
+            }
+        }
+        layers.computeIfAbsent(name, _ -> new ArrayList<>()).add(entry);
     }
 
     private static void group(String entry, String prefix, Map<String, List<String>> groups) {
@@ -415,7 +467,7 @@ final class Archive implements Closeable {
             if (Files.isRegularFile(root.resolve(APPLICATION))) {
                 names.add(APPLICATION);
             }
-            for (String prefix : List.of(CLASS_PATH, MODULE_PATH)) {
+            for (String prefix : List.of(CLASS_PATH, MODULE_PATH, LAYERS)) {
                 Path base = root.resolve(prefix);
                 if (Files.isDirectory(base)) {
                     try (Stream<Path> files = Files.walk(base)) {
