@@ -33,13 +33,15 @@ final class Archive implements Closeable {
      * what carries a module identity is resolved, and the rest is the unnamed module of the layer's own
      * loader. Which jar goes where is decided by the build and named here, never re-derived at run time.
      *
-     * <p>A layer is named on its own, not under the module that declared it. That is what the build
+     * <p>A layer's path is the application's own key qualified by the layer's name: {@code classpath} is
+     * the application's and {@code classpath.render} is the layer {@code render}'s. A layer is named on its
+     * own, not under the module that declared it. That is what the build
      * already keys it by - the {@code layer:<name>} dependency group it resolves in, and the pins written
      * against that group - so a name is global and a duplicate is refused there. Keying it here by the
      * declaring module instead would have required the caller to be a named module, which a jar cannot
      * promise: whoever consumes it decides whether it lands on the module path or the class path.</p>
      */
-    static final String LAYER_MODULE_PATH = "layer.modulepath.", LAYER_CLASS_PATH = "layer.classpath.";
+    static final String LAYER_MODULE_PATH = "modulepath.", LAYER_CLASS_PATH = "classpath.";
 
     /** Reads bytes and openable URLs for entries of the outer jar or directory, on demand. */
     interface Source extends Closeable {

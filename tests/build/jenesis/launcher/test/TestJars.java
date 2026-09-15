@@ -672,7 +672,7 @@ final class TestJars {
         declared.put("classpath", String.join(",", classpath.keySet()));
         declared.put("modulepath", String.join(",", modulepath.keySet()));
         layers.forEach((layer, jars) ->
-                declared.put("layer.modulepath." + layer, String.join(",", jars.keySet())));
+                declared.put("modulepath." + layer, String.join(",", jars.keySet())));
         declared.putAll(application);
         return declared;
     }

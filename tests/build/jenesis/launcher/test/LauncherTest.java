@@ -1072,7 +1072,7 @@ class LauncherTest {
         byte[] provider = providerJar();
         TestJars.writeBundle(bundle,
                 Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main",
-                        "layer.modulepath.render", "provider.jar"),
+                        "modulepath.render", "provider.jar"),
                 Map.of(),
                 layerFixture(),
                 Map.of("render", Map.of("provider.jar", provider)));
@@ -1106,8 +1106,8 @@ class LauncherTest {
                 Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main",
                         "modulepath", "spi.jar,host.jar",
                         "classpath", "lib-host.jar",
-                        "layer.modulepath.render", "provider.jar",
-                        "layer.classpath.render", "lib-layer.jar"),
+                        "modulepath.render", "provider.jar",
+                        "classpath.render", "lib-layer.jar"),
                 Map.of(),
                 host,
                 Map.of("render", Map.of(
@@ -1129,7 +1129,7 @@ class LauncherTest {
         byte[] provider = providerJar();
         TestJars.writeBundle(bundle,
                 Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main",
-                        "layer.modulepath.render", "provider.jar"),
+                        "modulepath.render", "provider.jar"),
                 Map.of(),
                 layerFixture(),
                 Map.of("render", Map.of("provider.jar", provider)));
@@ -1156,7 +1156,7 @@ class LauncherTest {
                         TestJars.serviceProvider("demo.provider.Impl", "demo.spi.Contract")));
         TestJars.writeBundle(bundle,
                 Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main",
-                        "layer.modulepath.render", "provider.jar"),
+                        "modulepath.render", "provider.jar"),
                 Map.of(),
                 layerFixture(),
                 Map.of("render", Map.of("provider.jar", provider)));
@@ -1187,7 +1187,7 @@ class LauncherTest {
                 Map.of("mainClass", "demo.host.Main",
                         "classpath", "host.jar",
                         "modulepath", "spi.jar",
-                        "layer.modulepath.render", "provider.jar"),
+                        "modulepath.render", "provider.jar"),
                 classpath,
                 modulepath,
                 Map.of("render", Map.of("provider.jar", providerJar())));
@@ -1214,14 +1214,14 @@ class LauncherTest {
 
         String key = "jenesis.test.layer.property";
         System.clearProperty(key);
-        System.setProperty("jenesis.layer.modulepath.render", provider.toString());
+        System.setProperty("jlayer.modulepath.render", provider.toString());
         try {
             launch(bundle, key);
             assertThat(System.getProperty(key))
                     .as("a deployment that unpacked its dependencies names the layer's path instead")
                     .isEqualTo("demo.provider.Impl");
         } finally {
-            System.clearProperty("jenesis.layer.modulepath.render");
+            System.clearProperty("jlayer.modulepath.render");
         }
     }
 
@@ -1243,7 +1243,7 @@ class LauncherTest {
                 Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main",
                         "modulepath", "spi.jar,host.jar",
                         "classpath", "lib-host.jar",
-                        "layer.modulepath.render", "provider.jar"),
+                        "modulepath.render", "provider.jar"),
                 Map.of(),
                 host,
                 Map.of("render", Map.of("provider.jar", provider)));
@@ -1281,16 +1281,16 @@ class LauncherTest {
         Files.write(library, TestJars.classJar("demo.lib.Value", TestJars.runner("demo.lib.Value", "layer")));
 
         System.clearProperty(key);
-        System.setProperty("jenesis.layer.modulepath.render", provider.toString());
-        System.setProperty("jenesis.layer.classpath.render", library.toString());
+        System.setProperty("jlayer.modulepath.render", provider.toString());
+        System.setProperty("jlayer.classpath.render", library.toString());
         try {
             launch(bundle, "jenesis.test.layer.files.provider");
             assertThat(System.getProperty(key))
                     .as("the layer reads its own class path off disk, not the host's copy of the class")
                     .isEqualTo("layer");
         } finally {
-            System.clearProperty("jenesis.layer.modulepath.render");
-            System.clearProperty("jenesis.layer.classpath.render");
+            System.clearProperty("jlayer.modulepath.render");
+            System.clearProperty("jlayer.classpath.render");
         }
     }
 
@@ -1307,7 +1307,7 @@ class LauncherTest {
         Map<String, String> application = new LinkedHashMap<>(Map.of(
                 "mainModule", "demo.host", "mainClass", "demo.host.Main"));
         layer.forEach((name, jars) ->
-                application.put("layer.modulepath." + name, String.join(",", jars.keySet())));
+                application.put("modulepath." + name, String.join(",", jars.keySet())));
         TestJars.writeBundle(bundle, application, Map.of(), modules, layer);
         return bundle;
     }
@@ -1371,8 +1371,8 @@ class LauncherTest {
                         TestJars.serviceProvider("demo.intruder.Impl", "demo.spi.Contract")));
         TestJars.writeBundle(bundle,
                 Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main",
-                        "layer.modulepath.render", "provider.jar",
-                        "layer.modulepath.other", "intruder.jar"),
+                        "modulepath.render", "provider.jar",
+                        "modulepath.other", "intruder.jar"),
                 Map.of(),
                 modules,
                 Map.of("render", Map.of("provider.jar", mine),

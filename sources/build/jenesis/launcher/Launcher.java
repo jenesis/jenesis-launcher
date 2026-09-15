@@ -28,8 +28,12 @@ import module java.instrument;
  */
 public final class Launcher {
 
-    /** System property prefix naming a layer's module path when it is not bundled in this jar. */
-    private static final String LAYER_PATH = "jenesis.layer.";
+    /**
+     * System property prefix naming a layer's paths when it is not bundled in this jar. Deliberately not a
+     * {@code jenesis.*} key: those configure a build, and this one is read by the application that build
+     * produced, wherever it runs and long after the build is over.
+     */
+    private static final String LAYER_PATH = "jlayer.";
 
     private static final StackWalker WALKER =
             StackWalker.getInstance(StackWalker.Option.RETAIN_CLASS_REFERENCE);
@@ -64,7 +68,7 @@ public final class Launcher {
      *
      * <p>The modules come from this jar when the caller runs inside a bundle that declares them, read on
      * demand like every other bundled class; otherwise from the path named by
-     * {@code jenesis.layer.<name>}, which is how a deployment that unpacked its dependencies supplies
+     * {@code jlayer.<path>.<name>}, which is how a deployment that unpacked its dependencies supplies
      * them.</p>
      */
     public static ModuleLayer layer(String name) {
@@ -213,7 +217,7 @@ public final class Launcher {
      * modules has no class path, and saying so by omission is how that reads.
      */
     private static List<Path> paths(String name, String prefix) {
-        String property = LAYER_PATH + prefix.substring("layer.".length()) + name;
+        String property = LAYER_PATH + prefix + name;
         String declaration = System.getProperty(property);
         if (declaration == null || declaration.isBlank()) {
             if (!prefix.equals(Archive.LAYER_MODULE_PATH)) {

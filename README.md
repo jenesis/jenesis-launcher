@@ -54,8 +54,9 @@ Renderer r = Launcher.instance("render", Renderer.class);
 ```
 
 The layer's dependencies are bundled among the application's in the same `jars/` store, and
-`layer.modulepath.render=<jar>,<jar>` in `application.properties` says which are its, with a
-`layer.classpath.` counterpart for the jars that carry no module identity. A layer splits the two paths
+`modulepath.render=<jar>,<jar>` in `application.properties` says which are its, with a
+`classpath.render` counterpart for the jars that carry no module identity - the application's own keys,
+qualified by the layer's name. A layer splits the two paths
 exactly as the application does, because a library worth isolating usually drags a long tail of jars that
 were never modularized: what is named is resolved, the rest is the unnamed module of the layer's own
 loader, and the layer's automatic modules read it as they would on a real `-cp`. So a jar the layer and
@@ -76,8 +77,10 @@ or several, which is the mistake it would otherwise hide; `load` hands over the 
 cases that genuinely expect more than one. Which module calls decides whose layer a name means, so two modules may each
 declare `render` without colliding.
 
-Outside a bundle - a deployment that unpacked its dependencies - `jenesis.layer.modulepath.<name>`
-and `jenesis.layer.classpath.<name>` name the layer's two paths instead, jar by jar. A layer on
+Outside a bundle - a deployment that unpacked its dependencies - `jlayer.modulepath.<name>`
+and `jlayer.classpath.<name>` name the layer's two paths instead, jar by jar. They are `jlayer.*` keys
+rather than `jenesis.*` ones: a `jenesis.*` property configures a build, and these are read by the
+application a build produced. A layer on
 disk is read from those files the way `java -p … -cp …` reads any module graph; the in-memory reading above
 is only for the case that has no files to name. The same code runs either way.
 

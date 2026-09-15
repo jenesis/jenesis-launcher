@@ -27,7 +27,8 @@ covers what it does, the tests and releasing. The user documentation is
 - The jar layout and the `application.properties` descriptor are the contract with the build tool's
   `Launcher` step in jenesis/jenesis and with the documentation: one `jars/<jar>/…` store, the descriptor
   keys (`mainClass`, `mainModule`, `classpath`, `modulepath`, `agentClass`, `addExports`, `addOpens`,
-  `addReads`, `signature.<dep>`, `layer.modulepath.<name>` and its `layer.classpath.` counterpart) and the manifest attributes.
+  `addReads`, `signature.<dep>`, `modulepath.<name>` and its `classpath.<name>` counterpart, the application's own keys qualified
+  by the layer's name) and the manifest attributes.
   A change to any of them is made together with the build tool and the documentation. The descriptor
   stays a properties file, unlike the build tool's `bundle` target, whose descriptor is a Java argument
   file: a bundle is handed to `java` as a command line, while this jar is read in process and carries
@@ -39,7 +40,7 @@ covers what it does, the tests and releasing. The user documentation is
 - A module layer is the same graph again under a name of its own. Its dependencies are bundled among the
   application's in the one store, so a jar a layer and the application both need is stored once and
   simply loaded twice, and two versions stand side by side because a bundled dependency is named after the
-  jar it came from. `layer.<name>` names what each holds. A layer is named on its own, which is already how the
+  jar it came from. `modulepath.<name>` and `classpath.<name>` name what each holds. A layer is named on its own, which is already how the
   build keys it - the `layer:<name>` dependency group it resolves in, and the pins written against that
   group - so a name is global and a duplicate is refused there. Keying it by the declaring module instead
   would have asked the caller to be a named module, and a jar cannot promise that: whoever consumes it
