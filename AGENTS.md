@@ -35,9 +35,11 @@ covers what it does, the tests and releasing. The user documentation is
   dependencies are discovered by scanning `classpath/` and `modulepath/`; no descriptor key declares them.
 - Bytes are read from the still-open jar on demand; nothing is merged, held in memory, or extracted, except
   what the JVM can read no other way: a native library it can only load from a file, and a layer's jars,
-  which `ModuleFinder.of` can only take as paths. Each is announced as `jenesis.layer.<name>`, the property a
-  filesystem deployment is launched with, so an application's layer code is the same everywhere and reaches
-  for nothing here.
+  which the module system reads only from the default file system - handed a jar inside a jar,
+  `ModuleFinder.of` copies it to a temporary directory itself and leaves it behind, so the launcher does that
+  once and deletes it on exit. A layer is announced as `jenesis.layer.<name>`, the property a filesystem
+  deployment is launched with, so an application's layer code is the same everywhere and reaches for nothing
+  here.
 
 ## Tests
 

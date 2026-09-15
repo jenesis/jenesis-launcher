@@ -107,11 +107,17 @@ public final class Launcher {
      * filesystem deployment is launched with, so an application's own layer code is identical wherever it
      * runs and needs nothing from this launcher.
      *
-     * <p>A layer is a module path, and a module path can only be read from files: {@link ModuleFinder#of}
-     * takes paths, not streams. A layer bundled inside the jar is therefore written to a temporary directory
-     * for the same reason a native library is - the JVM offers no other way in. An exploded bundle already
-     * is a directory, so its layers are read where they lie and nothing is copied, and a layer the caller
-     * has already pointed somewhere with an explicit {@code -D} is left alone.</p>
+     * <p>The unpacking is not a shortcut around reading from the jar: the module system will not read a jar
+     * from anywhere but the default file system, and handed one inside another jar {@link ModuleFinder#of}
+     * copies it to a temporary directory itself - and never removes it. Doing it here does the same thing
+     * once, beside the native libraries this launcher already writes out for the same reason, and deletes it
+     * on exit. Storing a layer exploded would avoid the copy, since the module system does read an exploded
+     * module in place, but an exploded directory can never be an automatic module - and a layer is exactly
+     * where a library with nothing but a jar name to go by ends up.</p>
+     *
+     * <p>An exploded bundle already is a directory, so its layers are read where they lie and nothing is
+     * copied, and a layer the caller has already pointed somewhere with an explicit {@code -D} is left
+     * alone.</p>
      */
     private static void materialize(Archive archive) throws IOException {
         Path root = null;
