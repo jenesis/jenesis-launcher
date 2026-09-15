@@ -1072,7 +1072,7 @@ class LauncherTest {
                 Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main"),
                 Map.of(),
                 layerFixture(),
-                Map.of("render", Map.of("provider.jar", provider)));
+                Map.of("demo.host/render", Map.of("provider.jar", provider)));
 
         String key = "jenesis.test.layer.load";
         System.clearProperty(key);
@@ -1091,7 +1091,7 @@ class LauncherTest {
                 Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main"),
                 Map.of(),
                 layerFixture(),
-                Map.of("render", Map.of("provider.jar", provider)));
+                Map.of("demo.host/render", Map.of("provider.jar", provider)));
 
         String key = "jenesis.test.layer.withheld";
         System.clearProperty(key);
@@ -1117,7 +1117,7 @@ class LauncherTest {
                 Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main"),
                 Map.of(),
                 layerFixture(),
-                Map.of("render", Map.of("provider.jar", provider)));
+                Map.of("demo.host/render", Map.of("provider.jar", provider)));
 
         String key = "jenesis.test.layer.swallowed";
         System.clearProperty(key);
@@ -1140,15 +1140,46 @@ class LauncherTest {
 
         String key = "jenesis.test.layer.property";
         System.clearProperty(key);
-        System.setProperty("jenesis.layer.render", folder.toString());
+        System.setProperty("jenesis.layer.demo.host.render", folder.toString());
         try {
             launch(bundle, key);
             assertThat(System.getProperty(key))
                     .as("a deployment that unpacked its dependencies names the layer's path instead")
                     .isEqualTo("demo.provider.Impl");
         } finally {
-            System.clearProperty("jenesis.layer.render");
+            System.clearProperty("jenesis.layer.demo.host.render");
         }
+    }
+
+    @Test
+    void scopesALayerNameToTheModuleThatDeclaredIt() throws Exception {
+        Path bundle = directory.resolve("scoped.jar");
+        Map<String, byte[]> modules = new LinkedHashMap<>(layerFixture());
+        // A second module declaring a layer of the same name - the case recursion makes likely, since a
+        // layer may itself hold a module that declares one, and nobody coordinates the names.
+        modules.put("other.jar", TestJars.modularJar("demo.other",
+                Map.of("demo/other/Other.class", TestJars.moduleNameRunner("demo.other.Other")),
+                Set.of("demo.spi", "build.jenesis.launcher"), Set.of("demo.other")));
+        byte[] mine = providerJar();
+        byte[] theirs = TestJars.jar(Map.of(
+                "module-info.class", TestJars.moduleInfo("demo.intruder",
+                        Set.of("demo.spi"), Set.of(), "demo.spi.Contract", "demo.intruder.Impl"),
+                "demo/intruder/Impl.class",
+                        TestJars.serviceProvider("demo.intruder.Impl", "demo.spi.Contract")));
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main"),
+                Map.of(),
+                modules,
+                Map.of("demo.host/render", Map.of("provider.jar", mine),
+                        "demo.other/render", Map.of("intruder.jar", theirs)));
+
+        String key = "jenesis.test.layer.scoped";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key))
+                .as("demo.host asked for 'render' and got its own, not the layer demo.other calls that")
+                .isEqualTo("demo.provider.Impl");
     }
 
     private static void launch(Path bundle, String... args) throws Exception {

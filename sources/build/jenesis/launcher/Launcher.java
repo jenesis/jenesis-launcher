@@ -82,11 +82,13 @@ public final class Launcher {
         ModuleLayer parent = module.getLayer() == null ? ModuleLayer.boot() : module.getLayer();
         try {
             Archive archive = bundle(caller);
-            List<Archive.Jar> bundled = archive == null ? List.of() : archive.layers().getOrDefault(name, List.of());
+            List<Archive.Jar> bundled = archive == null
+                    ? List.of()
+                    : archive.layers().getOrDefault(module.getName() + "/" + name, List.of());
             java.lang.module.Configuration configuration;
             ClassLoader loader;
             if (bundled.isEmpty()) {
-                ModuleFinder finder = ModuleFinder.of(paths(name));
+                ModuleFinder finder = ModuleFinder.of(paths(module, name));
                 configuration = parent.configuration().resolveAndBind(finder, ModuleFinder.of(), finder
                         .findAll()
                         .stream()
@@ -130,12 +132,13 @@ public final class Launcher {
         }
     }
 
-    private static Path[] paths(String name) {
-        String declaration = System.getProperty(LAYER_PATH + name);
+    private static Path[] paths(Module module, String name) {
+        String property = LAYER_PATH + module.getName() + "." + name;
+        String declaration = System.getProperty(property);
         if (declaration == null || declaration.isBlank()) {
-            throw new IllegalStateException("No layer " + name + " is bundled in this jar, and no "
-                    + LAYER_PATH + name + " names where its modules are - a deployment that unpacked its"
-                    + " dependencies supplies that property");
+            throw new IllegalStateException("No layer " + name + " of " + module.getName() + " is bundled in"
+                    + " this jar, and no " + property + " names where its modules are - a deployment that"
+                    + " unpacked its dependencies supplies that property");
         }
         return Arrays.stream(declaration.split(File.pathSeparator))
                 .filter(entry -> !entry.isBlank())

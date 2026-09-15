@@ -51,8 +51,10 @@ module my.library {
 Renderer r = Launcher.load("render", Renderer.class).findFirst().orElseThrow();
 ```
 
-The layer's dependencies are bundled under `layers/render/<jar>/…`, exploded exactly as the application's
-own are under `modulepath/`. The separate prefix is what keeps them off the application's module path, so
+The layer's dependencies are bundled under `layers/my.library/render/<jar>/…`, exploded exactly as the
+application's own are under `modulepath/`. The declaring module is part of the path because a layer may
+itself hold a module that declares one - nesting is unbounded - and the runtime derives the same key from
+the calling module, so nothing extra has to travel. The separate prefix is what keeps them off the application's module path, so
 nothing has to withhold them and no descriptor key declares them. They are read from the still-open jar by a
 second `InMemoryClassLoader`: nothing is relocated and nothing is unpacked.
 
@@ -63,8 +65,12 @@ this module, which `ServiceLoader` otherwise refuses because it checks `uses` ag
 no overload that takes one. Which module calls decides whose layer a name means, so two modules may each
 declare `render` without colliding.
 
-Outside a bundle - a deployment that unpacked its dependencies - `jenesis.layer.<name>` names the layer's
-module path instead, so the same code runs either way.
+Outside a bundle - a deployment that unpacked its dependencies - `jenesis.layer.<module>.<name>` names the
+layer's module path instead, so the same code runs either way.
+
+Nesting needs nothing further: `Launcher.layer` parents a layer on its *caller's*, so a module sitting
+inside one layer that asks for another gets a child of the first, and the API module it shares resolves
+from there rather than from the application.
 
 ## Building it
 

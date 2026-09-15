@@ -186,7 +186,8 @@ final class Archive implements Closeable {
     }
 
     /**
-     * The bundled module layers, each a layer name mapped to the dependencies it holds. A layer lives under
+     * The bundled module layers, each keyed {@code <declaring module>/<name>} and mapped to the
+     * dependencies it holds. A layer lives under
      * a prefix of its own rather than among the application's, which is what keeps its modules off the
      * application's module path without anything having to withhold them - two versions of one module are
      * the point of a layer, and one configuration cannot hold both.
@@ -218,11 +219,15 @@ final class Archive implements Closeable {
             group(entry, CLASS_PATH, classpathGroups);
             group(entry, MODULE_PATH, modulepathGroups);
             if (entry.startsWith(LAYERS)) {
-                int slash = entry.indexOf('/', LAYERS.length());
-                if (slash > LAYERS.length()) {
-                    group(entry.substring(slash + 1),
+                // layers/<declaring module>/<name>/<jar>/... - keyed by the module as well as the name,
+                // because a layer may itself hold a module that declares one, and two unrelated libraries
+                // may each call theirs the same thing.
+                int module = entry.indexOf('/', LAYERS.length());
+                int name = module < 0 ? -1 : entry.indexOf('/', module + 1);
+                if (module > LAYERS.length() && name > module + 1) {
+                    group(entry.substring(name + 1),
                             "",
-                            layerGroups.computeIfAbsent(entry.substring(LAYERS.length(), slash),
+                            layerGroups.computeIfAbsent(entry.substring(LAYERS.length(), name),
                                     _ -> new LinkedHashMap<>()));
                 }
             }
