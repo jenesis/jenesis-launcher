@@ -1017,6 +1017,140 @@ class LauncherTest {
                 .hasMessageContaining("mainClass");
     }
 
+    @Test
+    void bundledModuleShadowsASamePackageClassTheOuterJarAlsoCarries() throws Exception {
+        Path bundle = directory.resolve("shadowing.jar");
+        // The package this module owns is the launcher's own, which the parent loader certainly has, so
+        // the class is reachable from both sides - the case parent-first delegation used to decide wrongly.
+        byte[] shadowing = TestJars.modularJar("demo.shadowing",
+                Map.of("demo/shadow/Main.class",
+                                TestJars.reflectModuleNameMain("demo.shadow.Main",
+                                        "build.jenesis.launcher.Archive"),
+                        "build/jenesis/launcher/Archive.class",
+                                TestJars.setPropertyMain("build.jenesis.launcher.Archive")),
+                Set.of(), Set.of("demo.shadow", "build.jenesis.launcher"));
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.shadowing", "mainClass", "demo.shadow.Main"),
+                Map.of(),
+                Map.of("demo-shadowing.jar", shadowing));
+
+        String key = "jenesis.test.shadowing";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key))
+                .as("a module's package shadows the same package outside the bundle, as on a real module path")
+                .isEqualTo("demo.shadowing");
+    }
+
+    /** spi / host / provider, the shape a library uses to keep a dependency private. */
+    private Map<String, byte[]> layerFixture() throws IOException {
+        Map<String, byte[]> jars = new LinkedHashMap<>();
+        jars.put("spi.jar", TestJars.modularJar("demo.spi",
+                Map.of("demo/spi/Contract.class", TestJars.serviceInterface("demo.spi.Contract")),
+                Set.of(), Set.of("demo.spi")));
+        jars.put("host.jar", TestJars.modularJar("demo.host",
+                Map.of("demo/host/Main.class",
+                        TestJars.loadServiceMain("demo.host.Main", "render", "demo.spi.Contract")),
+                Set.of("demo.spi", "build.jenesis.launcher"), Set.of("demo.host")));
+        return jars;
+    }
+
+    private byte[] providerJar() throws IOException {
+        return TestJars.jar(Map.of(
+                "module-info.class", TestJars.moduleInfo("demo.provider",
+                        Set.of("demo.spi"), Set.of(), "demo.spi.Contract", "demo.provider.Impl"),
+                "demo/provider/Impl.class",
+                        TestJars.serviceProvider("demo.provider.Impl", "demo.spi.Contract")));
+    }
+
+    @Test
+    void loadsAServiceFromABundledLayerWithoutAUsesClause() throws Exception {
+        Path bundle = directory.resolve("layered.jar");
+        byte[] provider = providerJar();
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main"),
+                Map.of(),
+                layerFixture(),
+                Map.of("render", Map.of("provider.jar", provider)));
+
+        String key = "jenesis.test.layer.load";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key))
+                .as("the host reaches the isolated provider through the shared SPI, declaring no uses")
+                .isEqualTo("demo.provider.Impl");
+    }
+
+    @Test
+    void withholdsALayersModulesFromTheApplicationModulePath() throws Exception {
+        Path bundle = directory.resolve("withheld.jar");
+        byte[] provider = providerJar();
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main"),
+                Map.of(),
+                layerFixture(),
+                Map.of("render", Map.of("provider.jar", provider)));
+
+        String key = "jenesis.test.layer.withheld";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        // demo.provider resolved in the layer, not in the application's own graph: had it been on both, one
+        // configuration would hold two modules of one name, which is what a layer exists to avoid.
+        assertThat(System.getProperty(key)).isEqualTo("demo.provider.Impl");
+    }
+
+    @Test
+    void refusesALayerHoldingTheModuleThatDeclaresAServiceItProvides() throws Exception {
+        Path bundle = directory.resolve("swallowed.jar");
+        // A provider that bundled the contract instead of depending on it: the layer then carries its own
+        // demo.spi.Contract, and the host would look the service up against a different class of that name.
+        byte[] provider = TestJars.jar(Map.of(
+                "module-info.class", TestJars.moduleInfo("demo.provider",
+                        Set.of(), Set.of("demo.spi"), "demo.spi.Contract", "demo.provider.Impl"),
+                "demo/spi/Contract.class", TestJars.serviceInterface("demo.spi.Contract"),
+                "demo/provider/Impl.class",
+                        TestJars.serviceProvider("demo.provider.Impl", "demo.spi.Contract")));
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main"),
+                Map.of(),
+                layerFixture(),
+                Map.of("render", Map.of("provider.jar", provider)));
+
+        String key = "jenesis.test.layer.swallowed";
+        System.clearProperty(key);
+
+        assertThatThrownBy(() -> launch(bundle, key))
+                .hasStackTraceContaining(IllegalStateException.class.getName())
+                .hasStackTraceContaining("Layer render provides demo.spi.Contract")
+                .hasStackTraceContaining("holds demo.provider, which declares it");
+    }
+
+    @Test
+    void readsALayerFromItsPropertyWhenTheBundleDoesNotHoldIt() throws Exception {
+        Path bundle = directory.resolve("unbundled.jar");
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main"),
+                Map.of(),
+                layerFixture());
+        Path folder = Files.createDirectory(directory.resolve("render"));
+        Files.write(folder.resolve("provider.jar"), providerJar());
+
+        String key = "jenesis.test.layer.property";
+        System.clearProperty(key);
+        System.setProperty("jenesis.layer.render", folder.toString());
+        try {
+            launch(bundle, key);
+            assertThat(System.getProperty(key))
+                    .as("a deployment that unpacked its dependencies names the layer's path instead")
+                    .isEqualTo("demo.provider.Impl");
+        } finally {
+            System.clearProperty("jenesis.layer.render");
+        }
+    }
+
     private static void launch(Path bundle, String... args) throws Exception {
         ClassLoader original = Thread.currentThread().getContextClassLoader();
         try {
