@@ -36,6 +36,14 @@ public final class Launcher {
 
     private static final Map<Module, Map<String, ModuleLayer>> LAYERS = new ConcurrentHashMap<>();
 
+    /**
+     * The layer this launcher defined for the application, if it defined one. A caller on the class path is
+     * in the unnamed module and has no layer of its own, so this is the layer its own layers hang from: the
+     * application's modules are defined to the very loader that holds the class path, and the API module a
+     * layer shares is among them.
+     */
+    private static volatile ModuleLayer application;
+
     private Launcher() {
     }
 
@@ -44,8 +52,15 @@ public final class Launcher {
      * a child of the caller's own, so every module it does not itself hold - the API module the caller and
      * the layer share above all - resolves from the caller's layer and is the very same class on both sides.
      *
-     * <p>Two modules may each declare a layer called {@code render} without colliding: the caller's module,
-     * not the name alone, identifies which is meant.</p>
+     * <p>A layer is named on its own. That is already how the build keys it - the {@code layer:<name>}
+     * group it resolves in, and the pins written against it - so a name is global and a duplicate is
+     * refused there rather than resolved here. Keying it by the calling module instead would have asked
+     * the caller to be a named module, which a jar cannot promise: whoever consumes it decides whether it
+     * lands on the module path or the class path, and on the class path there is no module to name.</p>
+     *
+     * <p>The layer is still defined once per caller, because it is a child of the caller's own layer: the
+     * same declaration reached from two depths is two layers, which is what lets a module inside a layer
+     * declare one of its own.</p>
      *
      * <p>The modules come from this jar when the caller runs inside a bundle that declares them, read on
      * demand like every other bundled class; otherwise from the path named by
@@ -79,18 +94,17 @@ public final class Launcher {
 
     private static ModuleLayer define(Class<?> caller, String name) {
         Module module = caller.getModule();
-        ModuleLayer parent = module.getLayer() == null ? ModuleLayer.boot() : module.getLayer();
+        ModuleLayer own = module.getLayer(), hosted = application;
+        ModuleLayer parent = own != null ? own : hosted != null ? hosted : ModuleLayer.boot();
         try {
             Archive archive = bundle(caller);
-            Archive.Layer bundled = archive == null
-                    ? null
-                    : archive.layers().get(module.getName() + "." + name);
+            Archive.Layer bundled = archive == null ? null : archive.layers().get(name);
             if (bundled == null) {
                 // The layer's jars are files, so they are read as files: a ModuleFinder over its module
                 // path and a URLClassLoader over its class path, which is what `java -p … -cp …` does.
                 // Reading a jar out of memory is for the one case that has no file to name - a layer that
                 // travels inside an executable jar - and is not how a layer is read when it is on disk.
-                List<Path> modulepath = paths(module, name, Archive.LAYER_MODULE_PATH);
+                List<Path> modulepath = paths(name, Archive.LAYER_MODULE_PATH);
                 ModuleFinder finder = ModuleFinder.of(modulepath.toArray(Path[]::new));
                 java.lang.module.Configuration configuration = parent.configuration().resolveAndBind(
                         finder,
@@ -101,7 +115,7 @@ public final class Launcher {
                                 .collect(Collectors.toUnmodifiableSet()));
                 verify(name, configuration);
                 return ModuleLayer.defineModulesWithOneLoader(configuration, List.of(parent),
-                        unnamed(paths(module, name, Archive.LAYER_CLASS_PATH))).layer();
+                        unnamed(paths(name, Archive.LAYER_CLASS_PATH))).layer();
             }
             InMemoryModuleFinder finder = new InMemoryModuleFinder(bundled.modulepath());
             java.lang.module.Configuration configuration = parent.configuration()
@@ -165,16 +179,16 @@ public final class Launcher {
      * {@code classpath} counterpart. Only the module path must be named: a layer that isolates nothing but
      * modules has no class path, and saying so by omission is how that reads.
      */
-    private static List<Path> paths(Module module, String name, String prefix) {
-        String property = LAYER_PATH + prefix.substring("layer.".length()) + module.getName() + "." + name;
+    private static List<Path> paths(String name, String prefix) {
+        String property = LAYER_PATH + prefix.substring("layer.".length()) + name;
         String declaration = System.getProperty(property);
         if (declaration == null || declaration.isBlank()) {
             if (!prefix.equals(Archive.LAYER_MODULE_PATH)) {
                 return List.of();
             }
-            throw new IllegalStateException("No layer " + name + " of " + module.getName() + " is bundled in"
-                    + " this jar, and no " + property + " names where its modules are - a deployment that"
-                    + " unpacked its dependencies supplies that property");
+            throw new IllegalStateException("No layer " + name + " is bundled in this jar, and no "
+                    + property + " names where its modules are - a deployment that unpacked its"
+                    + " dependencies supplies that property");
         }
         return Arrays.stream(declaration.split(File.pathSeparator))
                 .filter(entry -> !entry.isBlank())
@@ -321,6 +335,7 @@ public final class Launcher {
             loader = new InMemoryClassLoader(archive, finder, system);
             controller = ModuleLayer.defineModules(configuration, List.of(ModuleLayer.boot()), _ -> loader);
             layer = controller.layer();
+            application = layer;
         } else {
             loader = new InMemoryClassLoader(archive, null, system);
         }

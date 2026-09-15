@@ -54,15 +54,15 @@ Renderer r = Launcher.load("render", Renderer.class).findFirst().orElseThrow();
 ```
 
 The layer's dependencies are bundled among the application's in the same `jars/` store, and
-`layer.modulepath.my.library.render=<jar>,<jar>` in `application.properties` says which are its, with a
+`layer.modulepath.render=<jar>,<jar>` in `application.properties` says which are its, with a
 `layer.classpath.` counterpart for the jars that carry no module identity. A layer splits the two paths
 exactly as the application does, because a library worth isolating usually drags a long tail of jars that
 were never modularized: what is named is resolved, the rest is the unnamed module of the layer's own
 loader, and the layer's automatic modules read it as they would on a real `-cp`. So a jar the layer and
 the application both need is stored **once** and simply loaded twice, and two versions stand side by side
-because each is named after the jar it came from. The declaring module is part of the key because a layer
-may itself hold a module that declares one - nesting is unbounded - and the runtime builds the same key
-from the calling module, so nothing extra has to travel. What keeps a layer's modules off the application's
+because each is named after the jar it came from. A layer is named on its own, which is already how the build keys
+it, so a name is global and a duplicate is refused there; keying it by the declaring module would have
+asked the caller to be a named module, which a jar cannot promise. What keeps a layer's modules off the application's
 module path is that `modulepath` does not name them: every path is spelled out, so nothing is included by
 sitting somewhere. They are read from the still-open jar by a second `InMemoryClassLoader`: nothing is
 relocated and nothing is unpacked.
@@ -74,8 +74,8 @@ this module, which `ServiceLoader` otherwise refuses because it checks `uses` ag
 no overload that takes one. Which module calls decides whose layer a name means, so two modules may each
 declare `render` without colliding.
 
-Outside a bundle - a deployment that unpacked its dependencies - `jenesis.layer.modulepath.<module>.<name>`
-and `jenesis.layer.classpath.<module>.<name>` name the layer's two paths instead, jar by jar. A layer on
+Outside a bundle - a deployment that unpacked its dependencies - `jenesis.layer.modulepath.<name>`
+and `jenesis.layer.classpath.<name>` name the layer's two paths instead, jar by jar. A layer on
 disk is read from those files the way `java -p … -cp …` reads any module graph; the in-memory reading above
 is only for the case that has no files to name. The same code runs either way.
 
