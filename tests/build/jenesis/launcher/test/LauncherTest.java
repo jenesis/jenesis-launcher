@@ -370,7 +370,7 @@ class LauncherTest {
 
     @Test
     void runsModuleResourceFromExplodedDirectory() throws Exception {
-        // The directory layout - classpath/<dep>/ and modulepath/<mod>/ as real folders, served via file: URLs.
+        // The directory layout - jars/<dep>/ as real folders, served via file: URLs.
         Path bundle = directory.resolve("exploded");
         Map<String, byte[]> entries = new LinkedHashMap<>();
         entries.put("demo/modres/Main.class", TestJars.classResourceMain("demo.modres.Main", "/greeting.txt"));
@@ -415,7 +415,7 @@ class LauncherTest {
         // without it, this test would observe "TOPSECRET".
         Files.write(directory.resolve("secret.txt"), "TOPSECRET".getBytes(StandardCharsets.UTF_8));
         Path bundle = directory.resolve("confined");
-        // From classpath/<dep>/, "../../../secret.txt" resolves to <directory>/secret.txt on disk.
+        // From jars/<dep>/, "../../../secret.txt" resolves to <directory>/secret.txt on disk.
         byte[] main = TestJars.readResourceMain("demo.cf.Main", "../../../secret.txt");
         TestJars.writeDirectory(bundle,
                 Map.of("mainClass", "demo.cf.Main"),
@@ -509,8 +509,8 @@ class LauncherTest {
         Path bundle = directory.resolve("signed-app.jar");
         Map<String, byte[]> entries = new LinkedHashMap<>();
         entries.put("application.properties",
-                properties(Map.of("mainClass", "demo.sig.Main", "signature.app.jar", chain)));
-        entries.put("classpath/app.jar/demo/sig/Main.class", TestJars.codeSourceSignerMain("demo.sig.Main"));
+                properties(Map.of("mainClass", "demo.sig.Main", "classpath", "app.jar", "signature.app.jar", chain)));
+        entries.put("jars/app.jar/demo/sig/Main.class", TestJars.codeSourceSignerMain("demo.sig.Main"));
         Files.write(bundle, TestJars.jar(entries));
 
         String key = "jenesis.test.signer";
@@ -526,8 +526,9 @@ class LauncherTest {
         // so getCertificates() is null and reading it throws.
         Path bundle = directory.resolve("unsigned-app.jar");
         Map<String, byte[]> entries = new LinkedHashMap<>();
-        entries.put("application.properties", properties(Map.of("mainClass", "demo.sig.Main")));
-        entries.put("classpath/app.jar/demo/sig/Main.class", TestJars.codeSourceSignerMain("demo.sig.Main"));
+        entries.put("application.properties",
+                properties(Map.of("mainClass", "demo.sig.Main", "classpath", "app.jar")));
+        entries.put("jars/app.jar/demo/sig/Main.class", TestJars.codeSourceSignerMain("demo.sig.Main"));
         Files.write(bundle, TestJars.jar(entries));
 
         assertThatThrownBy(() -> launch(bundle, "jenesis.test.unsigned"))
@@ -550,7 +551,7 @@ class LauncherTest {
         System.clearProperty(key);
         launch(bundle, key);
 
-        assertThat(System.getProperty(key)).contains("modulepath/mod.jar");
+        assertThat(System.getProperty(key)).contains("jars/mod.jar");
     }
 
     @Test
@@ -988,11 +989,12 @@ class LauncherTest {
         String key = "jenesis.test.trampoline";
         Properties properties = new Properties();
         properties.setProperty("agentClass", "demo.agent.Probe");
+        properties.setProperty("classpath", "probe.jar");
         ByteArrayOutputStream props = new ByteArrayOutputStream();
         properties.store(props, null);
         Map<String, byte[]> entries = new LinkedHashMap<>();
         entries.put("application.properties", props.toByteArray());
-        entries.put("classpath/probe.jar/demo/agent/Probe.class", TestJars.argumentPremain("demo.agent.Probe", key));
+        entries.put("jars/probe.jar/demo/agent/Probe.class", TestJars.argumentPremain("demo.agent.Probe", key));
         entries.put("marker/Marker.class", TestJars.setPropertyMain("marker.Marker"));
         Path bundle = directory.resolve("trampoline-bundle.jar");
         Files.write(bundle, TestJars.jar(entries));

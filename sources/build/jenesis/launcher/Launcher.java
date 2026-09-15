@@ -7,13 +7,13 @@ import module java.instrument;
  * Entry point for an executable jar produced by Jenesis, and the bootstrap for using such a bundle as a
  * Java agent.
  *
- * <p>Each dependency is exploded into its own subfolder of the jar ({@code classpath/<name>/},
- * {@code modulepath/<name>/}), so the launcher reads classes and resources on demand from the still-open
- * outer jar (see {@link Archive}). {@link #main} - the manifest {@code Main-Class}, where
- * {@code java -jar foo.jar} lands - reproduces
+ * <p>Each dependency is exploded into its own subfolder of the one {@code jars/} store, so the launcher
+ * reads classes and resources on demand from the still-open outer jar (see {@link Archive}). What a jar is
+ * for is named by the descriptor rather than shown by where it sits. {@link #main} - the manifest
+ * {@code Main-Class}, where {@code java -jar foo.jar} lands - reproduces
  * {@code java -p modulepath -cp classpath -m mainModule/mainClass}: build a single
- * {@link InMemoryClassLoader} whose unnamed module is the {@code classpath/} subfolders and, if there are
- * {@code modulepath/} subfolders, define a child {@link ModuleLayer} mapping every module to that same
+ * {@link InMemoryClassLoader} whose unnamed module is what {@code classpath} names and, for what
+ * {@code modulepath} names, define a child {@link ModuleLayer} mapping every module to that same
  * loader; invoke {@code premain} on each agent named by {@code agentClass} before the main class is loaded;
  * then invoke {@code main}.</p>
  *
@@ -261,8 +261,8 @@ public final class Launcher {
     }
 
     /**
-     * Builds the single loader for a bundle: the {@code classpath/} subfolders are its unnamed module and,
-     * when there are {@code modulepath/} subfolders, they are resolved and mapped to that same loader through
+     * Builds the single loader for a bundle: the jars {@code classpath} names are its unnamed module and,
+     * when {@code modulepath} names any, they are resolved and mapped to that same loader through
      * a child {@link ModuleLayer} - so one loader hosts the named modules and the unnamed module together,
      * just as {@code java -p modulepath -cp classpath} does (automatic modules read the class path while named
      * ones cannot, and a module shadows a same-named class-path package). Grants this launcher access to a

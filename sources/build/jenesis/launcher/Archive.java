@@ -5,15 +5,17 @@ import module java.base;
 /**
  * The on-demand view of an executable jar produced by Jenesis.
  *
- * <p>The bundling step explodes each dependency into its own subfolder of the outer jar, so every class
+ * <p>The bundling step explodes each dependency into its own subfolder of the one store, so every class
  * and resource is a <em>direct</em> entry:</p>
  * <pre>
  *   foo.jar
- *   |- application.properties     (mainClass=..., mainModule=..., agentClass=...)
+ *   |- application.properties     (mainClass=..., classpath=..., modulepath=..., layer.&lt;module&gt;.&lt;name&gt;=...)
  *   |- build/jenesis/launcher/... (this launcher, shaded into the jar root)
- *   |- classpath/&lt;dep&gt;/...        (a non-modular dependency, exploded)
- *   '- modulepath/&lt;mod&gt;/...        (a modular or automatic dependency, exploded)
+ *   '- jars/&lt;dep&gt;/...             (a dependency, exploded; what it is for the descriptor names)
  * </pre>
+ *
+ * <p>A jar is stored once and may be named by more than one path, which is how a layer and the application
+ * share a dependency without a second copy of it.</p>
  *
  * <p>Because each entry is addressable on its own, the launcher reads class and resource bytes straight
  * from the still-open outer jar (or the exploded directory) on demand and keeps only a name index in
@@ -23,8 +25,8 @@ import module java.base;
 final class Archive implements Closeable {
 
     static final String APPLICATION = "application.properties";
-    static final String CLASS_PATH = "classpath/";
-    static final String MODULE_PATH = "modulepath/";
+    /** The one store a bundle keeps its dependencies in; what each path holds is named, not placed. */
+    static final String JARS = "jars/";
     /** {@code application.properties} key prefix naming the dependencies a layer holds, by file name. */
     static final String LAYERS = "layer.";
 
@@ -49,7 +51,7 @@ final class Archive implements Closeable {
     }
 
     /**
-     * A dependency exploded under {@code classpath/<name>/} or {@code modulepath/<name>/}. {@code name} is
+     * A dependency exploded under {@code jars/<name>/}. {@code name} is
      * the original jar file name (so automatic-module naming is unchanged); {@link #names()} are its entry
      * names with that prefix stripped, presented in the multi-release view. Bytes and URLs are fetched from
      * the {@link Source} lazily.
@@ -132,6 +134,7 @@ final class Archive implements Closeable {
     }
 
     private final Properties application = new Properties();
+    private final List<Jar> stored = new ArrayList<>();
     private final List<Jar> classpath = new ArrayList<>();
     private final List<Jar> modulepath = new ArrayList<>();
     private final Map<String, List<Jar>> layers = new LinkedHashMap<>();
@@ -144,34 +147,8 @@ final class Archive implements Closeable {
         Archive archive = new Archive();
         archive.source = source;
         archive.index(source);
-        // Class-path "first wins", so order matters: honour the declared order from the optional `classpath`
-        // property (comma-separated dependency names), falling back to the dependency name for anything it
-        // does not list. The module path is a set, so its name order is only a deterministic tie-break.
-        order(archive.classpath, archive.application.getProperty("classpath"));
-        archive.modulepath.sort(Comparator.comparing(Jar::name));
         archive.bind();
         return archive;
-    }
-
-    /**
-     * Orders {@code jars} by the declared comma-separated dependency names in {@code declared} (the original
-     * class-path order), with any jar it does not name following in dependency-name order. With no
-     * declaration the order is purely the dependency name - deterministic, but not the original class path.
-     */
-    private static void order(List<Jar> jars, String declared) {
-        if (declared == null || declared.isBlank()) {
-            jars.sort(Comparator.comparing(Jar::name));
-            return;
-        }
-        Map<String, Integer> position = new HashMap<>();
-        for (String name : declared.split(",")) {
-            String trimmed = name.strip();
-            if (!trimmed.isEmpty()) {
-                position.putIfAbsent(trimmed, position.size());
-            }
-        }
-        jars.sort(Comparator.<Jar>comparingInt(jar -> position.getOrDefault(jar.name(), Integer.MAX_VALUE))
-                .thenComparing(Jar::name));
     }
 
     Properties application() {
@@ -187,11 +164,10 @@ final class Archive implements Closeable {
     }
 
     /**
-     * The bundled module layers, each keyed {@code <declaring module>/<name>} and mapped to the
-     * dependencies it holds. A layer lives under
-     * a prefix of its own rather than among the application's, which is what keeps its modules off the
-     * application's module path without anything having to withhold them - two versions of one module are
-     * the point of a layer, and one configuration cannot hold both.
+     * The bundled module layers, each keyed {@code <declaring module>.<name>} and mapped to the dependencies
+     * it holds. A layer's modules are stored among the application's and told apart by the declaration
+     * alone, which is what keeps them off the application's module path - two versions of one module are the
+     * point of a layer, and one configuration cannot hold both.
      */
     Map<String, List<Jar>> layers() {
         return layers;
@@ -213,14 +189,11 @@ final class Archive implements Closeable {
         if (properties != null) {
             application.load(new ByteArrayInputStream(properties));
         }
-        Map<String, List<String>> classpathGroups = new LinkedHashMap<>();
-        Map<String, List<String>> modulepathGroups = new LinkedHashMap<>();
+        Map<String, List<String>> groups = new LinkedHashMap<>();
         for (String entry : source.names()) {
-            group(entry, CLASS_PATH, classpathGroups);
-            group(entry, MODULE_PATH, modulepathGroups);
+            group(entry, JARS, groups);
         }
-        collect(classpathGroups, CLASS_PATH, source, classpath);
-        collect(modulepathGroups, MODULE_PATH, source, modulepath);
+        collect(groups, JARS, source, stored);
     }
 
     /**
@@ -230,25 +203,40 @@ final class Archive implements Closeable {
      */
     private void bind() {
         Map<String, Jar> byName = new LinkedHashMap<>();
-        modulepath.forEach(jar -> byName.putIfAbsent(jar.name(), jar));
+        stored.forEach(jar -> byName.putIfAbsent(jar.name(), jar));
+        select(byName, application.getProperty("classpath"), classpath, "classpath");
+        select(byName, application.getProperty("modulepath"), modulepath, "modulepath");
         for (String key : application.stringPropertyNames()) {
             if (!key.startsWith(LAYERS)) {
                 continue;
             }
             List<Jar> jars = new ArrayList<>();
-            for (String name : application.getProperty(key).split(",")) {
-                String trimmed = name.strip();
-                if (trimmed.isEmpty()) {
-                    continue;
-                }
-                Jar jar = byName.get(trimmed);
-                if (jar == null) {
-                    throw new IllegalStateException("Layer " + key.substring(LAYERS.length())
-                            + " names " + trimmed + ", which this bundle does not hold");
-                }
-                jars.add(jar);
-            }
+            select(byName, application.getProperty(key), jars, key);
             layers.put(key.substring(LAYERS.length()), jars);
+        }
+    }
+
+    /**
+     * Resolves a declared comma-separated list of dependency names against the store, in the order it was
+     * declared - which is the class path's order, and a deterministic one everywhere else. A name the store
+     * does not hold is refused rather than skipped: a path that silently loses an entry fails later and
+     * somewhere else.
+     */
+    private static void select(Map<String, Jar> byName, String declaration, List<Jar> target, String origin) {
+        if (declaration == null || declaration.isBlank()) {
+            return;
+        }
+        for (String name : declaration.split(",")) {
+            String trimmed = name.strip();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            Jar jar = byName.get(trimmed);
+            if (jar == null) {
+                throw new IllegalStateException(origin + " names " + trimmed
+                        + ", which this bundle does not hold");
+            }
+            target.add(jar);
         }
     }
 
@@ -459,13 +447,11 @@ final class Archive implements Closeable {
             if (Files.isRegularFile(root.resolve(APPLICATION))) {
                 names.add(APPLICATION);
             }
-            for (String prefix : List.of(CLASS_PATH, MODULE_PATH)) {
-                Path base = root.resolve(prefix);
-                if (Files.isDirectory(base)) {
-                    try (Stream<Path> files = Files.walk(base)) {
-                        files.filter(Files::isRegularFile).forEach(file -> names.add(
-                                prefix + base.relativize(file).toString().replace(File.separatorChar, '/')));
-                    }
+            Path base = root.resolve(JARS);
+            if (Files.isDirectory(base)) {
+                try (Stream<Path> files = Files.walk(base)) {
+                    files.filter(Files::isRegularFile).forEach(file -> names.add(
+                            JARS + base.relativize(file).toString().replace(File.separatorChar, '/')));
                 }
             }
             return names;

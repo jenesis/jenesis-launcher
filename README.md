@@ -9,9 +9,10 @@
 **A bootstrap for executable jars that keeps real Java modularity.** The launcher is shaded into the jar root
 and run as its `Main-Class`, so `java -jar foo.jar` starts the application - while modular dependencies are
 resolved into a fresh `java.lang.ModuleLayer` and non-modular ones become the unnamed module of the same
-loader. Each dependency is exploded into its own subfolder of the outer jar, and class and resource bytes are
-read straight from the still-open jar on demand: nothing is merged into a flat jar or held in memory, and
-only native libraries are ever extracted to disk.
+loader. Each dependency is exploded into its own subfolder of the jar's one `jars/` store - what a jar is
+for the descriptor names, rather than where it sits - and class and resource bytes are read straight from the
+still-open jar on demand: nothing is merged into a flat jar or held in memory, and only native libraries are
+ever extracted to disk.
 
 📖 **The user documentation lives at [jenesis.build/launcher](https://jenesis.build/launcher/).** How a
 launch proceeds, the jar layout, bundled agents, module-access grants, troubleshooting, and the full
@@ -34,8 +35,9 @@ java -jar foo.jar [args...]              # run it
 java -javaagent:foo.jar=args -jar app.jar   # a hand-assembled jar with no mainClass is an agent
 ```
 
-The build tool writes `mainClass`, `mainModule` and `classpath` into the jar's `application.properties`; the
-agent, module-access and signer keys the launcher also understands are for jars assembled by other means.
+The build tool writes `mainClass`, `mainModule`, `classpath` and `modulepath` into the jar's
+`application.properties`, naming every jar it stored; the agent, module-access and signer keys the launcher
+also understands are for jars assembled by other means.
 
 ## Module layers
 
@@ -51,14 +53,15 @@ module my.library {
 Renderer r = Launcher.load("render", Renderer.class).findFirst().orElseThrow();
 ```
 
-The layer's dependencies are bundled among the application's under `modulepath/`, and
+The layer's dependencies are bundled among the application's in the same `jars/` store, and
 `layer.my.library.render=<jar>,<jar>` in `application.properties` says which are its. So a jar the layer and
 the application both need is stored **once** and simply loaded twice, and two versions stand side by side
 because each is named after the jar it came from. The declaring module is part of the key because a layer
 may itself hold a module that declares one - nesting is unbounded - and the runtime builds the same key
-from the calling module, so nothing extra has to travel. The separate prefix is what keeps them off the application's module path, so
-nothing has to withhold them and no descriptor key declares them. They are read from the still-open jar by a
-second `InMemoryClassLoader`: nothing is relocated and nothing is unpacked.
+from the calling module, so nothing extra has to travel. What keeps a layer's modules off the application's
+module path is that `modulepath` does not name them: every path is spelled out, so nothing is included by
+sitting somewhere. They are read from the still-open jar by a second `InMemoryClassLoader`: nothing is
+relocated and nothing is unpacked.
 
 The layer is a child of the caller's, so every module it does not itself hold resolves from the caller - the
 API module above all, which is therefore the *same* class on both sides, and the call across the boundary is

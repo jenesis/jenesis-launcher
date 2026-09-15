@@ -6,8 +6,8 @@ import java.security.cert.CertificateException;
 import java.util.jar.Attributes;
 
 /**
- * The single loader for every dependency in an executable jar - both the {@code classpath/} jars (its
- * unnamed module) and the {@code modulepath/} modules (defined to it as named modules through
+ * The single loader for every dependency in an executable jar - both the class-path jars (its
+ * unnamed module) and the module-path modules (defined to it as named modules through
  * {@link ModuleLayer#defineModules}). This mirrors how a real {@code java -p modulepath -cp classpath}
  * launch works: one application loader hosts the named modules and the unnamed module together, with the
  * {@link ModuleLayer} as metadata on top.
@@ -15,7 +15,7 @@ import java.util.jar.Attributes;
  * <p>It holds no class or resource bytes - only the {@link Archive.Jar} handles and a package-to-module
  * index. Class and resource bytes are read from the still-open outer jar (or directory) on demand and
  * discarded after {@link #defineClass}. On the class path the first jar in the declared class-path order
- * wins (the {@code classpath} property, otherwise dependency name); a package owned by a bundled module is
+ * wins, in the order the {@code classpath} property names them; a package owned by a bundled module is
  * served only from that module, so a same-named package on the class path is shadowed - the JDK's own rule
  * for {@code java -p ... -cp ...}.</p>
  *

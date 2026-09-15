@@ -25,22 +25,23 @@ covers what it does, the tests and releasing. The user documentation is
   (an automatic module reads the class path, a strict module does not; a module's package shadows the class
   path) are reproduced, not improved on. A behaviour the JDK does not have is not added here.
 - The jar layout and the `application.properties` descriptor are the contract with the build tool's
-  `Launcher` step in jenesis/jenesis and with the documentation: `classpath/<jar>/…` and `modulepath/<jar>/…`
-  subfolders, the descriptor keys (`mainClass`, `mainModule`, `classpath`, `agentClass`, `addExports`,
-  `addOpens`, `addReads`, `signature.<dep>`, `layer.<declaring module>.<name>`) and the manifest
-  attributes.
+  `Launcher` step in jenesis/jenesis and with the documentation: one `jars/<jar>/…` store, the descriptor
+  keys (`mainClass`, `mainModule`, `classpath`, `modulepath`, `agentClass`, `addExports`, `addOpens`,
+  `addReads`, `signature.<dep>`, `layer.<declaring module>.<name>`) and the manifest attributes.
   A change to any of them is made together with the build tool and the documentation.
+- Every path is spelled out. A jar is on the class path, the module path or in a layer because the
+  descriptor names it there, never because of the folder it sits in, and a name the store does not hold is
+  refused rather than skipped. One jar may be named by several paths, which is what lets a layer and the
+  application share a dependency without a second copy.
 - A module layer is the same graph again under a name of its own. Its dependencies are bundled among the
-  application's under `modulepath/`, so a jar a layer and the application both need is stored once and
+  application's in the one store, so a jar a layer and the application both need is stored once and
   simply loaded twice, and two versions stand side by side because a bundled dependency is named after the
-  jar it came from. `layer.<declaring module>.<name>` names what each holds, and the application's own
-  module path is everything no layer claims. The declaring module is part of the key because a layer may
-  itself hold a module that declares one, so nesting is unbounded and two unrelated libraries may each call
-  theirs the same thing; the runtime builds the same key from the calling module, so nothing extra
-  travels. The prefix is what
-  keeps a layer's modules off the application's module path - two versions of one module are the point of a
-  layer, and one configuration cannot hold both - so nothing has to withhold them and no descriptor key
-  declares them; they are discovered by scanning, like the class path and the module path.
+  jar it came from. `layer.<declaring module>.<name>` names what each holds. The declaring module is part of
+  the key because a layer may itself hold a module that declares one, so nesting is unbounded and two
+  unrelated libraries may each call theirs the same thing; the runtime builds the same key from the calling
+  module, so nothing extra travels. What keeps a layer's modules off the application's module path is that
+  `modulepath` does not name them - two versions of one module are the point of a layer, and one
+  configuration cannot hold both.
   `Launcher.layer`/`Launcher.load` define it on demand, as a child of the caller's layer, so every module
   the layer does not itself hold - the API module it shares with the caller above all - resolves from the
   caller and is the same class on both sides. Which module calls decides whose layer a name means, so two

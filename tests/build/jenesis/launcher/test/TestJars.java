@@ -577,8 +577,8 @@ final class TestJars {
 
     /**
      * As {@link #writeBundle(Path, Map, Map, Map)}, with {@code layers} mapping a {@code <module>.<name>}
-     * key to the dependencies it holds. They are exploded among the application's under
-     * {@code modulepath/}; the caller declares the membership with a {@code layer.<module>.<name>} entry.
+     * key to the dependencies it holds. Every dependency is exploded into the one {@code jars/} store and
+     * named by the descriptor, so a jar the application and a layer both need is written once.
      */
     static void writeBundle(Path target,
                             Map<String, String> application,
@@ -586,11 +586,12 @@ final class TestJars {
                             Map<String, byte[]> modulepath,
                             Map<String, Map<String, byte[]>> layers) throws IOException {
         Map<String, byte[]> entries = new LinkedHashMap<>();
-        entries.put("application.properties", applicationProperties(application));
-        explode(entries, "classpath/", classpath);
-        explode(entries, "modulepath/", modulepath);
-        for (Map.Entry<String, Map<String, byte[]>> layer : layers.entrySet()) {
-            explode(entries, "modulepath/", layer.getValue());
+        entries.put("application.properties",
+                applicationProperties(declare(application, classpath, modulepath, layers)));
+        explode(entries, classpath);
+        explode(entries, modulepath);
+        for (Map<String, byte[]> layer : layers.values()) {
+            explode(entries, layer);
         }
         Files.write(target, jar(entries));
     }
@@ -601,9 +602,27 @@ final class TestJars {
                                Map<String, byte[]> classpath,
                                Map<String, byte[]> modulepath) throws IOException {
         Files.createDirectories(root);
-        Files.write(root.resolve("application.properties"), applicationProperties(application));
-        explodeToDirectory(root.resolve("classpath"), classpath);
-        explodeToDirectory(root.resolve("modulepath"), modulepath);
+        Files.write(root.resolve("application.properties"),
+                applicationProperties(declare(application, classpath, modulepath, Map.of())));
+        explodeToDirectory(root.resolve("jars"), classpath);
+        explodeToDirectory(root.resolve("jars"), modulepath);
+    }
+
+    /**
+     * The descriptor that names what the one store holds: which of its jars are the class path, which are
+     * the module path, and which belong to a layer. A key the caller declares itself wins, so a test can
+     * pin a class-path order or name a dependency the bundle deliberately does not hold.
+     */
+    private static Map<String, String> declare(Map<String, String> application,
+                                               Map<String, byte[]> classpath,
+                                               Map<String, byte[]> modulepath,
+                                               Map<String, Map<String, byte[]>> layers) {
+        Map<String, String> declared = new LinkedHashMap<>();
+        declared.put("classpath", String.join(",", classpath.keySet()));
+        declared.put("modulepath", String.join(",", modulepath.keySet()));
+        layers.forEach((layer, jars) -> declared.put("layer." + layer, String.join(",", jars.keySet())));
+        declared.putAll(application);
+        return declared;
     }
 
     private static byte[] applicationProperties(Map<String, String> application) throws IOException {
@@ -614,9 +633,9 @@ final class TestJars {
         return out.toByteArray();
     }
 
-    private static void explode(Map<String, byte[]> entries, String section, Map<String, byte[]> jars) throws IOException {
+    private static void explode(Map<String, byte[]> entries, Map<String, byte[]> jars) throws IOException {
         for (Map.Entry<String, byte[]> jar : jars.entrySet()) {
-            String prefix = section + jar.getKey() + "/";
+            String prefix = "jars/" + jar.getKey() + "/";
             try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(jar.getValue()))) {
                 ZipEntry entry;
                 while ((entry = zip.getNextEntry()) != null) {
