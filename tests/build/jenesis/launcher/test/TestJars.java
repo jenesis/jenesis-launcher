@@ -454,6 +454,109 @@ final class TestJars {
         });
     }
 
+    /** A {@code module-info.class} that also declares {@code provides service with implementation}. */
+    static byte[] moduleInfo(String moduleName, Set<String> requires, Set<String> exports,
+                             String service, String implementation) {
+        return ClassFile.of().buildModule(ModuleAttribute.of(ModuleDesc.of(moduleName), builder -> {
+            builder.requires(ModuleDesc.of("java.base"), ClassFile.ACC_MANDATED, null);
+            for (String require : requires) {
+                builder.requires(ModuleDesc.of(require), 0, null);
+            }
+            for (String export : exports) {
+                builder.exports(PackageDesc.of(export), 0);
+            }
+            builder.provides(ModuleProvideInfo.of(ClassDesc.of(service), List.of(ClassDesc.of(implementation))));
+        }));
+    }
+
+    /** A method-less public interface, enough to be a service type. */
+    static byte[] serviceInterface(String binaryName) {
+        return ClassFile.of().build(ClassDesc.of(binaryName), builder -> builder
+                .withFlags(ClassFile.ACC_PUBLIC | ClassFile.ACC_INTERFACE | ClassFile.ACC_ABSTRACT)
+                .withSuperclass(ConstantDescs.CD_Object));
+    }
+
+    /** A public class implementing {@code contract} with a public no-argument constructor. */
+    static byte[] serviceProvider(String binaryName, String contract) {
+        return ClassFile.of().build(ClassDesc.of(binaryName), builder -> builder
+                .withFlags(ClassFile.ACC_PUBLIC)
+                .withSuperclass(ConstantDescs.CD_Object)
+                .withInterfaceSymbols(ClassDesc.of(contract))
+                .withMethodBody(ConstantDescs.INIT_NAME, ConstantDescs.MTD_void, ClassFile.ACC_PUBLIC,
+                        code -> code.aload(0)
+                                .invokespecial(ConstantDescs.CD_Object, ConstantDescs.INIT_NAME,
+                                        ConstantDescs.MTD_void)
+                                .return_()));
+    }
+
+    /**
+     * As above, with a constructor that also calls {@code target.run(key)} - so instantiating the provider
+     * proves it could reach {@code target}, wherever that class was loaded from.
+     */
+    static byte[] serviceProvider(String binaryName, String contract, String target, String key) {
+        return ClassFile.of().build(ClassDesc.of(binaryName), builder -> builder
+                .withFlags(ClassFile.ACC_PUBLIC)
+                .withSuperclass(ConstantDescs.CD_Object)
+                .withInterfaceSymbols(ClassDesc.of(contract))
+                .withMethodBody(ConstantDescs.INIT_NAME, ConstantDescs.MTD_void, ClassFile.ACC_PUBLIC,
+                        code -> code.aload(0)
+                                .invokespecial(ConstantDescs.CD_Object, ConstantDescs.INIT_NAME,
+                                        ConstantDescs.MTD_void)
+                                .loadConstant(key)
+                                .invokestatic(ClassDesc.of(target), "run",
+                                        MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_String))
+                                .return_()));
+    }
+
+    /**
+     * A main that stores the class name of the first provider of {@code service} in the caller's
+     * {@code layer} into {@code System.setProperty(args[0], …)} - the whole bridge in one call, with no
+     * {@code uses} clause in the module that runs it.
+     */
+    /**
+     * A main that stores the class name of the single provider {@code Launcher.instance} returns into
+     * {@code System.setProperty(args[0], …)}, so a layer with none or several fails the launch instead.
+     */
+    static byte[] instanceMain(String binaryName, String layer, String service) {
+        ClassDesc cdLauncher = ClassDesc.of("build.jenesis.launcher.Launcher");
+        ClassDesc cdClass = ClassDesc.of("java.lang.Class");
+        return main(binaryName, code -> code
+                .aload(0).iconst_0().aaload()
+                .loadConstant(layer)
+                .loadConstant(ClassDesc.of(service))
+                .invokestatic(cdLauncher, "instance",
+                        MethodTypeDesc.of(ConstantDescs.CD_Object, ConstantDescs.CD_String, cdClass))
+                .invokevirtual(ConstantDescs.CD_Object, "getClass", MethodTypeDesc.of(cdClass))
+                .invokevirtual(cdClass, "getName", MethodTypeDesc.of(ConstantDescs.CD_String))
+                .invokestatic(CD_System, "setProperty",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String,
+                                ConstantDescs.CD_String))
+                .pop()
+                .return_());
+    }
+
+    static byte[] loadServiceMain(String binaryName, String layer, String service) {
+        ClassDesc cdLauncher = ClassDesc.of("build.jenesis.launcher.Launcher");
+        ClassDesc cdServiceLoader = ClassDesc.of("java.util.ServiceLoader");
+        ClassDesc cdOptional = ClassDesc.of("java.util.Optional");
+        ClassDesc cdClass = ClassDesc.of("java.lang.Class");
+        return main(binaryName, code -> code
+                .aload(0).iconst_0().aaload()
+                .loadConstant(layer)
+                .loadConstant(ClassDesc.of(service))
+                .invokestatic(cdLauncher, "load",
+                        MethodTypeDesc.of(cdServiceLoader, ConstantDescs.CD_String, cdClass))
+                .invokevirtual(cdServiceLoader, "findFirst", MethodTypeDesc.of(cdOptional))
+                .invokevirtual(cdOptional, "orElseThrow", MethodTypeDesc.of(ConstantDescs.CD_Object))
+                .invokevirtual(ConstantDescs.CD_Object, "getClass", MethodTypeDesc.of(cdClass))
+                .invokevirtual(cdClass, "getName", MethodTypeDesc.of(ConstantDescs.CD_String))
+                .invokestatic(CD_System, "setProperty",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String,
+                                ConstantDescs.CD_String))
+                .pop()
+                .return_());
+    }
+
     /** Packs entries into a jar (zip) image. */
     static byte[] jar(Map<String, byte[]> entries) throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -483,6 +586,25 @@ final class TestJars {
         return jar(entries);
     }
 
+    /** A jar holding several classes plus a real {@code module-info.class} for an explicit module. */
+    static byte[] modularJar(String moduleName, Map<String, byte[]> classes,
+                             Set<String> requires, Set<String> exports) throws IOException {
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("module-info.class", moduleInfo(moduleName, requires, exports));
+        entries.putAll(classes);
+        return jar(entries);
+    }
+
+    /** A manifest carrying one main attribute, for a fixture that needs a header of its own. */
+    static byte[] manifest(String name, String value) throws IOException {
+        Manifest manifest = new Manifest();
+        manifest.getMainAttributes().putValue("Manifest-Version", "1.0");
+        manifest.getMainAttributes().putValue(name, value);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        manifest.write(out);
+        return out.toByteArray();
+    }
+
     /** A jar holding a class plus an {@code Automatic-Module-Name} manifest header. */
     static byte[] automaticModuleJar(String moduleName, String binaryName, byte[] classBytes) throws IOException {
         Manifest manifest = new Manifest();
@@ -501,10 +623,27 @@ final class TestJars {
                             Map<String, String> application,
                             Map<String, byte[]> classpath,
                             Map<String, byte[]> modulepath) throws IOException {
+        writeBundle(target, application, classpath, modulepath, Map.of());
+    }
+
+    /**
+     * As {@link #writeBundle(Path, Map, Map, Map)}, with {@code layers} mapping a {@code <module>.<name>}
+     * key to the dependencies it holds. Every dependency is exploded into the one {@code jars/} store and
+     * named by the descriptor, so a jar the application and a layer both need is written once.
+     */
+    static void writeBundle(Path target,
+                            Map<String, String> application,
+                            Map<String, byte[]> classpath,
+                            Map<String, byte[]> modulepath,
+                            Map<String, Map<String, byte[]>> layers) throws IOException {
         Map<String, byte[]> entries = new LinkedHashMap<>();
-        entries.put("application.properties", applicationProperties(application));
-        explode(entries, "classpath/", classpath);
-        explode(entries, "modulepath/", modulepath);
+        entries.put("application.properties",
+                applicationProperties(declare(application, classpath, modulepath, layers)));
+        explode(entries, classpath);
+        explode(entries, modulepath);
+        for (Map<String, byte[]> layer : layers.values()) {
+            explode(entries, layer);
+        }
         Files.write(target, jar(entries));
     }
 
@@ -514,9 +653,28 @@ final class TestJars {
                                Map<String, byte[]> classpath,
                                Map<String, byte[]> modulepath) throws IOException {
         Files.createDirectories(root);
-        Files.write(root.resolve("application.properties"), applicationProperties(application));
-        explodeToDirectory(root.resolve("classpath"), classpath);
-        explodeToDirectory(root.resolve("modulepath"), modulepath);
+        Files.write(root.resolve("application.properties"),
+                applicationProperties(declare(application, classpath, modulepath, Map.of())));
+        explodeToDirectory(root.resolve("jars"), classpath);
+        explodeToDirectory(root.resolve("jars"), modulepath);
+    }
+
+    /**
+     * The descriptor that names what the one store holds: which of its jars are the class path, which are
+     * the module path, and which belong to a layer. A key the caller declares itself wins, so a test can
+     * pin a class-path order or name a dependency the bundle deliberately does not hold.
+     */
+    private static Map<String, String> declare(Map<String, String> application,
+                                               Map<String, byte[]> classpath,
+                                               Map<String, byte[]> modulepath,
+                                               Map<String, Map<String, byte[]>> layers) {
+        Map<String, String> declared = new LinkedHashMap<>();
+        declared.put("classpath", String.join(",", classpath.keySet()));
+        declared.put("modulepath", String.join(",", modulepath.keySet()));
+        layers.forEach((layer, jars) ->
+                declared.put("modulepath." + layer, String.join(",", jars.keySet())));
+        declared.putAll(application);
+        return declared;
     }
 
     private static byte[] applicationProperties(Map<String, String> application) throws IOException {
@@ -527,9 +685,9 @@ final class TestJars {
         return out.toByteArray();
     }
 
-    private static void explode(Map<String, byte[]> entries, String section, Map<String, byte[]> jars) throws IOException {
+    private static void explode(Map<String, byte[]> entries, Map<String, byte[]> jars) throws IOException {
         for (Map.Entry<String, byte[]> jar : jars.entrySet()) {
-            String prefix = section + jar.getKey() + "/";
+            String prefix = "jars/" + jar.getKey() + "/";
             try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(jar.getValue()))) {
                 ZipEntry entry;
                 while ((entry = zip.getNextEntry()) != null) {

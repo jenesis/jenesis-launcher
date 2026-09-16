@@ -6,8 +6,8 @@ import java.security.cert.CertificateException;
 import java.util.jar.Attributes;
 
 /**
- * The single loader for every dependency in an executable jar - both the {@code classpath/} jars (its
- * unnamed module) and the {@code modulepath/} modules (defined to it as named modules through
+ * The single loader for every dependency in an executable jar - both the class-path jars (its
+ * unnamed module) and the module-path modules (defined to it as named modules through
  * {@link ModuleLayer#defineModules}). This mirrors how a real {@code java -p modulepath -cp classpath}
  * launch works: one application loader hosts the named modules and the unnamed module together, with the
  * {@link ModuleLayer} as metadata on top.
@@ -15,7 +15,7 @@ import java.util.jar.Attributes;
  * <p>It holds no class or resource bytes - only the {@link Archive.Jar} handles and a package-to-module
  * index. Class and resource bytes are read from the still-open outer jar (or directory) on demand and
  * discarded after {@link #defineClass}. On the class path the first jar in the declared class-path order
- * wins (the {@code classpath} property, otherwise dependency name); a package owned by a bundled module is
+ * wins, in the order the {@code classpath} property names them; a package owned by a bundled module is
  * served only from that module, so a same-named package on the class path is shadowed - the JDK's own rule
  * for {@code java -p ... -cp ...}.</p>
  *
@@ -43,12 +43,29 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
     private final Map<String, ModuleReader> readers = new LinkedHashMap<>();
     private final Map<String, ProtectionDomain> domains = new ConcurrentHashMap<>();
     private final Map<String, Optional<Manifest>> manifests = new ConcurrentHashMap<>();
+    private final Map<String, ClassLoader> remote = new HashMap<>();
 
     InMemoryClassLoader(Archive archive, InMemoryModuleFinder finder, ClassLoader parent)
             throws IOException {
+        this(archive, archive.classpath(), finder, parent);
+    }
+
+    /**
+     * A layer's loader, over an explicit class path rather than the archive's own. A layer is a module
+     * graph like any other and splits the same way: what carries a module identity is resolved, and the
+     * rest is this loader's unnamed module, which the layer's automatic modules read as they would on a
+     * real {@code -cp}. This is for a layer bundled inside the jar, which has no file to name; a layer on
+     * disk is read from its files by the JDK's own finder and loader.
+     *
+     * <p>Unlike the application's loader, a layer's class path shadows the parent rather than deferring to
+     * it. The parent here is the caller's own loader, which is where the version the layer exists to hide
+     * lives; deferring to it would hand the layer that very version back.</p>
+     */
+    InMemoryClassLoader(Archive archive, List<Archive.Jar> classpath, InMemoryModuleFinder finder,
+                        ClassLoader parent) throws IOException {
         super("jenesis", parent);
         this.archive = archive;
-        this.classpath = archive.classpath();
+        this.classpath = classpath;
         if (finder != null) {
             // Finder order is sorted by jar name, so a LinkedHashMap keeps the native-library winner stable.
             for (ModuleReference reference : finder.findAll()) {
@@ -64,6 +81,85 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
                 }
             }
         }
+    }
+
+    /**
+     * Records which loader serves each package a module in {@code parents} exports to this layer, as
+     * {@code jdk.internal.loader.Loader} does for a layer the JDK defines itself. A layer reads the
+     * modules above it through the module graph rather than through the loader chain, so what it can
+     * reach is what those modules export to it, and the API module it shares with its host is the very
+     * class the host holds rather than a second copy of it.
+     */
+    void remote(java.lang.module.Configuration configuration, List<ModuleLayer> parents) {
+        for (ResolvedModule resolved : configuration.modules()) {
+            for (ResolvedModule read : resolved.reads()) {
+                if (read.configuration() == configuration) {
+                    continue;
+                }
+                ClassLoader loader = parents.stream()
+                        .map(parent -> parent.findModule(read.name()))
+                        .flatMap(Optional::stream)
+                        .findFirst()
+                        .map(Module::getClassLoader)
+                        .orElse(null);
+                if (loader == null) {
+                    loader = ClassLoader.getPlatformClassLoader();
+                }
+                ModuleDescriptor descriptor = read.reference().descriptor();
+                if (descriptor.isAutomatic()) {
+                    for (String packageName : descriptor.packages()) {
+                        remote.putIfAbsent(packageName, loader);
+                    }
+                } else {
+                    for (ModuleDescriptor.Exports exports : descriptor.exports()) {
+                        if (!exports.isQualified() || exports.targets().contains(resolved.name())) {
+                            remote.putIfAbsent(exports.source(), loader);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Resolves a class whose package a bundled module owns against that module first, and delegates
+     * everything else to the parent as usual. The JDK's own layer loader
+     * ({@code jdk.internal.loader.Loader}) does the same, and it is what makes
+     * {@code java -p modulepath -cp classpath} shadow a same-named class-path package with the module's.
+     * Inheriting {@link ClassLoader}'s parent-first delegation broke that rule whenever the parent also had
+     * the package: {@link #findClass} implements the shadowing but was never reached, so a class the outer
+     * jar itself carries - this launcher's own shaded classes, for one - won over a bundled module of the
+     * same package, and a module path entry naming that package could not be reached at all.
+     */
+    @Override
+    protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+        String packageName = packageOf(name);
+        if (packageToModule.containsKey(packageName)) {
+            synchronized (getClassLoadingLock(name)) {
+                Class<?> loaded = findLoadedClass(name);
+                if (loaded == null) {
+                    loaded = findClass(name);
+                }
+                if (resolve) {
+                    resolveClass(loaded);
+                }
+                return loaded;
+            }
+        }
+        ClassLoader loader = remote.get(packageName);
+        if (loader != null) {
+            synchronized (getClassLoadingLock(name)) {
+                Class<?> loaded = findLoadedClass(name);
+                if (loaded == null) {
+                    loaded = loader.loadClass(name);
+                }
+                if (resolve) {
+                    resolveClass(loaded);
+                }
+                return loaded;
+            }
+        }
+        return super.loadClass(name, resolve);
     }
 
     @Override

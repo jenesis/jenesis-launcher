@@ -9,9 +9,10 @@
 **A bootstrap for executable jars that keeps real Java modularity.** The launcher is shaded into the jar root
 and run as its `Main-Class`, so `java -jar foo.jar` starts the application - while modular dependencies are
 resolved into a fresh `java.lang.ModuleLayer` and non-modular ones become the unnamed module of the same
-loader. Each dependency is exploded into its own subfolder of the outer jar, and class and resource bytes are
-read straight from the still-open jar on demand: nothing is merged into a flat jar or held in memory, and
-only native libraries are ever extracted to disk.
+loader. Each dependency is exploded into its own subfolder of the jar's one `jars/` store - what a jar is
+for the descriptor names, rather than where it sits - and class and resource bytes are read straight from the
+still-open jar on demand: nothing is merged into a flat jar or held in memory, and only native libraries are
+ever extracted to disk.
 
 📖 **The user documentation lives at [jenesis.build/launcher](https://jenesis.build/launcher/).** How a
 launch proceeds, the jar layout, bundled agents, module-access grants, troubleshooting, and the full
@@ -34,8 +35,58 @@ java -jar foo.jar [args...]              # run it
 java -javaagent:foo.jar=args -jar app.jar   # a hand-assembled jar with no mainClass is an agent
 ```
 
-The build tool writes `mainClass`, `mainModule` and `classpath` into the jar's `application.properties`; the
-agent, module-access and signer keys the launcher also understands are for jars assembled by other means.
+The build tool writes `mainClass`, `mainModule`, `classpath` and `modulepath` into the jar's
+`application.properties`, naming every jar it stored; the agent, module-access and signer keys the launcher
+also understands are for jars assembled by other means.
+
+## Module layers
+
+A module can keep a dependency private - two versions of one library in one JVM, with no package relocated.
+It declares the layer, requires this module, and asks for it by name:
+
+```java
+module my.library {
+    requires build.jenesis.launcher;
+    requires my.library.spi;          // the API module, shared with the layer
+}
+
+Renderer r = Launcher.instance("render", Renderer.class);
+```
+
+The layer's dependencies are bundled among the application's in the same `jars/` store, and
+`modulepath.render=<jar>,<jar>` in `application.properties` says which are its, with a
+`classpath.render` counterpart for the jars that carry no module identity - the application's own keys,
+qualified by the layer's name. A layer splits the two paths
+exactly as the application does, because a library worth isolating usually drags a long tail of jars that
+were never modularized: what is named is resolved, the rest is the unnamed module of the layer's own
+loader, and the layer's automatic modules read it as they would on a real `-cp`. So a jar the layer and
+the application both need is stored **once** and simply loaded twice, and two versions stand side by side
+because each is named after the jar it came from. A layer is named on its own, which is already how the build keys
+it, so a name is global and a duplicate is refused there; keying it by the declaring module would have
+asked the caller to be a named module, which a jar cannot promise. What keeps a layer's modules off the application's
+module path is that `modulepath` does not name them: every path is spelled out, so nothing is included by
+sitting somewhere. They are read from the still-open jar by a second `InMemoryClassLoader`: nothing is
+relocated and nothing is unpacked.
+
+The layer is a child of the caller's, so every module it does not itself hold resolves from the caller - the
+API module above all, which is therefore the *same* class on both sides, and the call across the boundary is
+an ordinary interface call. The calling module needs no `uses` clause; the call adds the service dependence to
+this module, which `ServiceLoader` otherwise refuses because it checks `uses` against the caller and offers
+no overload that takes one. `instance` returns the one implementation the layer provides and refuses none
+or several, which is the mistake it would otherwise hide; `load` hands over the `ServiceLoader` for the
+cases that genuinely expect more than one. Which module calls decides whose layer a name means, so two modules may each
+declare `render` without colliding.
+
+Outside a bundle - a deployment that unpacked its dependencies - `jlayer.modulepath.<name>`
+and `jlayer.classpath.<name>` name the layer's two paths instead, jar by jar. They are `jlayer.*` keys
+rather than `jenesis.*` ones: a `jenesis.*` property configures a build, and these are read by the
+application a build produced. A layer on
+disk is read from those files the way `java -p … -cp …` reads any module graph; the in-memory reading above
+is only for the case that has no files to name. The same code runs either way.
+
+Nesting needs nothing further: `Launcher.layer` parents a layer on its *caller's*, so a module sitting
+inside one layer that asks for another gets a child of the first, and the API module it shares resolves
+from there rather than from the application.
 
 ## Building it
 
