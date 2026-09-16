@@ -12,7 +12,7 @@ under this coordinate against it:
 
 A KEYS file is only as trustworthy as the repository it came from, so confirm the
 fingerprint against a second source before relying on it. The same fingerprint is
-published at https://jenesis.build/tool/securing-the-supply-chain/#signing-key and
+published at https://jenesis.build/tool/securing-the-supply-chain/#the-jenesis-signing-key and
 served by the maintainer's GitHub account at https://github.com/raphw.gpg.
 
 The current signing key, and the key it replaced in 2019, which is revoked and kept
