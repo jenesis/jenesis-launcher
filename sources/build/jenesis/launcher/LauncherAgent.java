@@ -9,7 +9,7 @@ import module java.instrument;
  *
  * <p>A bundled agent cannot be passed to the JVM as {@code -javaagent:foo.jar} directly: that switch
  * resolves a {@code Premain-Class} from the agent jar's <em>own</em> class path, whereas the bundle's agents
- * live under {@code classpath/} and {@code modulepath/} subfolders that the JVM never sees. Reference this
+ * live under {@code jars/} subfolders that the JVM never sees. Reference this
  * class from the bundle's manifest instead:</p>
  *
  * <pre>
