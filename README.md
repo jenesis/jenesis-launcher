@@ -84,6 +84,12 @@ application a build produced. A layer on
 disk is read from those files the way `java -p … -cp …` reads any module graph; the in-memory reading above
 is only for the case that has no files to name. The same code runs either way.
 
+A layer that is not bundled in a launcher jar is defined from the `jlayer.*` system properties when a module
+first asks for it. Any code can rewrite system properties while the JVM runs, so code that runs earlier - in
+the application or in an outer layer - can change which jars that layer holds, and so place its own code in
+another module's layer, outside the encapsulation that layer was declared for. A layer bundled in a launcher
+jar is read from the jar and is not affected.
+
 Native access follows the same split. `enableNativeAccess` in the descriptor names the application's modules
 that are granted it, as `--enable-native-access` would; the class path is reached only by the
 `Enable-Native-Access: ALL-UNNAMED` attribute of the executable jar's own manifest. A layer's modules exist
@@ -94,12 +100,6 @@ JDK checks the calling module rather than the launcher: a module without native 
 about or refused exactly as if it had granted the layer itself, and cannot gain more through the launcher.
 Only the application's own modules are granted by the launcher, which is why the executable jar carries
 `Enable-Native-Access: ALL-UNNAMED`.
-
-System properties can be rewritten by any code while the JVM runs, and the launcher reads a layer's `jlayer.*`
-properties only when it defines the layer. Code that runs before then - in the application or in an outer
-layer - can therefore change which jars an inner layer on disk holds and which of its modules are granted
-native access, though never beyond what the calling module could grant itself. A layer bundled in a launcher
-jar is read from the jar and is not affected.
 
 Nesting needs nothing further: `Launcher.layer` parents a layer on its *caller's*, so a module sitting
 inside one layer that asks for another gets a child of the first, and the API module it shares resolves
