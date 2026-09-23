@@ -9,7 +9,7 @@ import module java.base;
  * and resource is a <em>direct</em> entry:</p>
  * <pre>
  *   foo.jar
- *   |- application.properties     (mainClass=..., classpath=..., modulepath=..., layer.&lt;module&gt;.&lt;name&gt;=...)
+ *   |- application.properties     (mainClass, classpath, modulepath, modulepath.&lt;name&gt;, classpath.&lt;name&gt;)
  *   |- build/jenesis/launcher/... (this launcher, shaded into the jar root)
  *   '- jars/&lt;dep&gt;/...             (a dependency, exploded; what it is for the descriptor names)
  * </pre>
@@ -216,9 +216,10 @@ final class Archive implements Closeable {
     }
 
     /**
-     * Resolves each {@code layer.<module>.<name>} declaration against the dependencies already indexed. A
-     * layer's modules are bundled among the application's rather than beside them, so a jar both of them
-     * need is stored once and simply loaded twice; the declaration is what tells them apart.
+     * Resolves each {@code modulepath.<name>} and {@code classpath.<name>} declaration against the
+     * dependencies already indexed. A layer's modules are bundled among the application's rather than
+     * beside them, so a jar both of them need is stored once and simply loaded twice; the declaration is
+     * what tells them apart.
      */
     private void bind() {
         Map<String, Jar> byName = new LinkedHashMap<>();
@@ -251,8 +252,8 @@ final class Archive implements Closeable {
         }
         if (!stored.isEmpty() && classpath.isEmpty() && modulepath.isEmpty() && layers.isEmpty()) {
             throw new IllegalStateException("This bundle holds " + stored.size()
-                    + " jars and names none of them: classpath, modulepath and layer.* are all absent,"
-                    + " and a path is read because the descriptor names it");
+                    + " jars and names none of them: classpath, modulepath, modulepath.<name> and"
+                    + " classpath.<name> are all absent, and a path is read because the descriptor names it");
         }
     }
 
