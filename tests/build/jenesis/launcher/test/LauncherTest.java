@@ -843,6 +843,59 @@ class LauncherTest {
     }
 
     @Test
+    void enablesNativeAccessForTheModulesTheDescriptorNames() throws Exception {
+        Path bundle = directory.resolve("native-access-app.jar");
+        byte[] library = TestJars.modularJar("demo.lib", "demo.lib.Lib",
+                TestJars.nativeAccessRunner("demo.lib.Lib"), Set.of(), Set.of("demo.lib"));
+        byte[] application = TestJars.modularJar("demo.main", "demo.main.Main",
+                TestJars.callRunMain("demo.main.Main", "demo.lib.Lib"), Set.of("demo.lib"), Set.of());
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.main", "mainClass", "demo.main.Main", "enableNativeAccess", "demo.lib"),
+                Map.of(),
+                Map.of("demo-lib.jar", library, "demo-main.jar", application));
+
+        String key = "jenesis.test.native.access";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("true");
+    }
+
+    @Test
+    void enablesNoNativeAccessTheDescriptorDoesNotName() throws Exception {
+        Path bundle = directory.resolve("no-native-access-app.jar");
+        byte[] library = TestJars.modularJar("demo.lib", "demo.lib.Lib",
+                TestJars.nativeAccessRunner("demo.lib.Lib"), Set.of(), Set.of("demo.lib"));
+        byte[] application = TestJars.modularJar("demo.main", "demo.main.Main",
+                TestJars.callRunMain("demo.main.Main", "demo.lib.Lib"), Set.of("demo.lib"), Set.of());
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.main", "mainClass", "demo.main.Main"),
+                Map.of(),
+                Map.of("demo-lib.jar", library, "demo-main.jar", application));
+
+        String key = "jenesis.test.no.native.access";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("false");
+    }
+
+    @Test
+    void refusesNativeAccessForAModuleThatIsNotBundled() throws Exception {
+        Path bundle = directory.resolve("unknown-native-access-app.jar");
+        byte[] application = TestJars.modularJar("demo.main", "demo.main.Main",
+                TestJars.runner("demo.main.Main", "unused"), Set.of(), Set.of());
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.main", "mainClass", "demo.main.Main", "enableNativeAccess", "demo.absent"),
+                Map.of(),
+                Map.of("demo-main.jar", application));
+
+        assertThatThrownBy(() -> launch(bundle, "jenesis.test.unknown.native.access"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("demo.absent");
+    }
+
+    @Test
     void deniesModuleAccessWithoutAddExports() throws Exception {
         // The same bundle without addExports: the class-path main cannot reach the unexported package.
         Path bundle = directory.resolve("denied-app.jar");
@@ -1080,6 +1133,90 @@ class LauncherTest {
         assertThat(System.getProperty(key))
                 .as("the host reaches the isolated provider through the shared SPI, declaring no uses")
                 .isEqualTo("demo.provider.Impl");
+    }
+
+    private byte[] nativeProviderJar(String key) throws IOException {
+        return TestJars.jar(Map.of(
+                "module-info.class", TestJars.moduleInfo("demo.provider",
+                        Set.of("demo.spi"), Set.of(), "demo.spi.Contract", "demo.provider.Impl"),
+                "demo/provider/Impl.class",
+                        TestJars.serviceProvider("demo.provider.Impl", "demo.spi.Contract", "demo.provider.Probe", key),
+                "demo/provider/Probe.class", TestJars.nativeAccessRunner("demo.provider.Probe")));
+    }
+
+    @Test
+    void enablesNativeAccessForTheModulesOfABundledLayerTheDescriptorNames() throws Exception {
+        Path bundle = directory.resolve("layered-native.jar");
+        String key = "jenesis.test.layer.native";
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main",
+                        "modulepath.render", "provider.jar",
+                        "enableNativeAccess.render", "demo.provider"),
+                Map.of(),
+                layerFixture(),
+                Map.of("render", Map.of("provider.jar", nativeProviderJar(key))));
+
+        System.clearProperty(key);
+        launch(bundle, "jenesis.test.layer.native.provider");
+
+        assertThat(System.getProperty(key))
+                .as("a layer's module is out of reach of --enable-native-access, so the launcher grants it")
+                .isEqualTo("true");
+    }
+
+    @Test
+    void enablesNoNativeAccessInALayerTheDescriptorDoesNotName() throws Exception {
+        Path bundle = directory.resolve("layered-no-native.jar");
+        String key = "jenesis.test.layer.no.native";
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main",
+                        "modulepath.render", "provider.jar"),
+                Map.of(),
+                layerFixture(),
+                Map.of("render", Map.of("provider.jar", nativeProviderJar(key))));
+
+        System.clearProperty(key);
+        launch(bundle, "jenesis.test.layer.no.native.provider");
+
+        assertThat(System.getProperty(key)).isEqualTo("false");
+    }
+
+    @Test
+    void enablesNativeAccessForALayerOnDiskFromItsProperty() throws Exception {
+        Path bundle = directory.resolve("unbundled-native.jar");
+        String key = "jenesis.test.layer.native.property";
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main"),
+                Map.of(),
+                layerFixture());
+        Path provider = Files.createDirectory(directory.resolve("render-native")).resolve("provider.jar");
+        Files.write(provider, nativeProviderJar(key));
+
+        System.clearProperty(key);
+        System.setProperty("jlayer.modulepath.render", provider.toString());
+        System.setProperty("jlayer.enableNativeAccess.render", "demo.provider");
+        try {
+            launch(bundle, "jenesis.test.layer.native.property.provider");
+            assertThat(System.getProperty(key)).isEqualTo("true");
+        } finally {
+            System.clearProperty("jlayer.modulepath.render");
+            System.clearProperty("jlayer.enableNativeAccess.render");
+        }
+    }
+
+    @Test
+    void refusesNativeAccessForAModuleALayerDoesNotHold() throws Exception {
+        Path bundle = directory.resolve("layered-unknown-native.jar");
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.host", "mainClass", "demo.host.Main",
+                        "modulepath.render", "provider.jar",
+                        "enableNativeAccess.render", "demo.absent"),
+                Map.of(),
+                layerFixture(),
+                Map.of("render", Map.of("provider.jar", providerJar())));
+
+        assertThatThrownBy(() -> launch(bundle, "jenesis.test.layer.unknown.native"))
+                .hasStackTraceContaining("Layer render holds no module demo.absent");
     }
 
     @Test

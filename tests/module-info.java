@@ -1,6 +1,7 @@
 /**
  * @jenesis.release 25
  * @jenesis.test build.jenesis.launcher
+ * @jenesis.native build.jenesis.launcher
  * @jenesis.pin net.bytebuddy 1.15.11 SHA-256/fa08998aae1e7bdae83bde0712c50e8444d71c0e0c196bb2247ade8d4ad0eb90
  * @jenesis.pin net.bytebuddy/byte-buddy 1.15.11 SHA-256/fa08998aae1e7bdae83bde0712c50e8444d71c0e0c196bb2247ade8d4ad0eb90
  * @jenesis.pin org.apiguardian.api 1.1.2 SHA-256/b509448ac506d607319f182537f0b35d71007582ec741832a1f111e5b5b70b38

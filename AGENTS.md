@@ -27,7 +27,8 @@ covers what it does, the tests and releasing. The user documentation is
 - The jar layout and the `application.properties` descriptor are the contract with the build tool's
   `Launcher` step in jenesis/jenesis and with the documentation: one `jars/<jar>/…` store, the descriptor
   keys (`mainClass`, `mainModule`, `classpath`, `modulepath`, `agentClass`, `addExports`, `addOpens`,
-  `addReads`, `signature.<dep>`, `modulepath.<name>` and its `classpath.<name>` counterpart, the application's own keys qualified
+  `addReads`, `enableNativeAccess`, `signature.<dep>`, `modulepath.<name>` and its `classpath.<name>` and
+  `enableNativeAccess.<name>` counterparts, the application's own keys qualified
   by the layer's name) and the manifest attributes.
   A change to any of them is made together with the build tool and the documentation. The descriptor
   stays a properties file, unlike the build tool's `bundle` target, whose descriptor is a Java argument

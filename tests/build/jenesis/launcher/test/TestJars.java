@@ -403,6 +403,26 @@ final class TestJars {
                 .return_());
     }
 
+    /**
+     * A class with a {@code public static void run(String)} that stores whether its own module has native
+     * access into {@code System.setProperty(arg, String.valueOf(getModule().isNativeAccessEnabled()))}.
+     */
+    static byte[] nativeAccessRunner(String binaryName) {
+        ClassDesc cdClass = ClassDesc.of("java.lang.Class");
+        ClassDesc cdModule = ClassDesc.of("java.lang.Module");
+        return method(binaryName, "run", MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_String), code -> code
+                .aload(0)
+                .loadConstant(ClassDesc.of(binaryName))
+                .invokevirtual(cdClass, "getModule", MethodTypeDesc.of(cdModule))
+                .invokevirtual(cdModule, "isNativeAccessEnabled", MethodTypeDesc.of(ConstantDescs.CD_boolean))
+                .invokestatic(ConstantDescs.CD_String, "valueOf",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_boolean))
+                .invokestatic(CD_System, "setProperty",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String, ConstantDescs.CD_String))
+                .pop()
+                .return_());
+    }
+
     /** A class with a {@code public static void run(String)} that runs {@code System.setProperty(arg, value)}. */
     static byte[] runner(String binaryName, String value) {
         return method(binaryName, "run", MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_String), code -> code
