@@ -62,12 +62,14 @@ covers what it does, the tests and releasing. The user documentation is
   layer exports to it, as `jdk.internal.loader.Loader` is, so the API module it shares is the very class
   the host holds while everything the host does not export - its class path above all - stays out of
   reach. A layer exists to hide the version the caller holds, so its unnamed module is its own.
-  `Launcher.layer`/`Launcher.load`/`Launcher.instance` define it on demand, as a child of the caller's layer, so every module
+  `Launcher.layer`/`Launcher.load`/`Launcher.instance` define it on demand for the class of the lookup the
+  caller passes - never a class read off the stack - as a child of the caller's layer, so every module
   the layer does not itself hold - the API module it shares with the caller above all - resolves from the
   caller and is the same class on both sides. Which module calls decides whose layer a name means, so two
   modules may each declare `render`. `load` adds the service dependence to this module rather than asking
   the caller for a `uses` clause, because `ServiceLoader` checks `uses` against the caller and offers no
-  overload that takes one.
+  overload that takes one. Native access in a layer is granted through that lookup, so the JDK checks the
+  calling module; the launcher itself grants only the application's own modules.
 - Bytes are read from the still-open jar on demand; nothing is merged, held in memory, or extracted, except
   a native library that the JVM can only load from a file.
 
