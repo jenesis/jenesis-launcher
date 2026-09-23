@@ -147,8 +147,9 @@ public final class Launcher {
                                 .map(reference -> reference.descriptor().name())
                                 .collect(Collectors.toUnmodifiableSet()));
                 verify(name, configuration);
-                return ModuleLayer.defineModulesWithOneLoader(configuration, List.of(parent),
-                        unnamed(paths(name, Archive.LAYER_CLASS_PATH))).layer();
+                return enableNativeAccess(name, System.getProperty(LAYER_PATH + Archive.LAYER_NATIVE_ACCESS + name),
+                        ModuleLayer.defineModulesWithOneLoader(configuration, List.of(parent),
+                                unnamed(paths(name, Archive.LAYER_CLASS_PATH))));
             }
             InMemoryModuleFinder finder = new InMemoryModuleFinder(bundled.modulepath());
             java.lang.module.Configuration configuration = parent.configuration()
@@ -157,10 +158,34 @@ public final class Launcher {
             InMemoryClassLoader loader = new InMemoryClassLoader(archive, bundled.classpath(), finder,
                     ClassLoader.getPlatformClassLoader());
             loader.remote(configuration, List.of(parent));
-            return ModuleLayer.defineModules(configuration, List.of(parent), _ -> loader).layer();
+            return enableNativeAccess(name, archive.application().getProperty(Archive.LAYER_NATIVE_ACCESS + name),
+                    ModuleLayer.defineModules(configuration, List.of(parent), _ -> loader));
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to define layer " + name + " for " + module, e);
         }
+    }
+
+    /**
+     * Grants native access to the modules of a freshly defined layer that {@code declaration} names, a
+     * comma-separated list read from {@code jlayer.enableNativeAccess.<name>} for a layer on disk or from
+     * {@code enableNativeAccess.<name>} in the bundled descriptor - the layer's equivalent of
+     * {@code --enable-native-access}, which cannot name a module the boot layer does not hold. A layer's
+     * class path is an unnamed module, which only {@code ALL-UNNAMED} on the command line or in the
+     * manifest reaches. Granting is itself a restricted operation, so the launcher needs native access of
+     * its own to do it without a warning; the build grants it wherever it grants a layer.
+     */
+    private static ModuleLayer enableNativeAccess(String name, String declaration, ModuleLayer.Controller controller) {
+        if (declaration != null) {
+            for (String entry : declaration.split(",")) {
+                String module = entry.strip();
+                if (!module.isEmpty()) {
+                    controller.enableNativeAccess(controller.layer().findModule(module).orElseThrow(() ->
+                            new IllegalStateException("Layer " + name + " holds no module " + module
+                                    + " to enable native access for")));
+                }
+            }
+        }
+        return controller.layer();
     }
 
     /**
@@ -331,7 +356,8 @@ public final class Launcher {
      * a child {@link ModuleLayer} - so one loader hosts the named modules and the unnamed module together,
      * just as {@code java -p modulepath -cp classpath} does (automatic modules read the class path while named
      * ones cannot, and a module shadows a same-named class-path package). Grants this launcher access to a
-     * modular main package and applies the {@code addExports}/{@code addOpens}/{@code addReads} properties.
+     * modular main package and applies the {@code addExports}/{@code addOpens}/{@code addReads} and
+     * {@code enableNativeAccess} properties.
      */
     private static InMemoryClassLoader prepare(Archive archive) throws Exception {
         String mainClass = archive.application().getProperty("mainClass");
@@ -459,10 +485,23 @@ public final class Launcher {
      * {@code --add-exports} / {@code --add-opens} / {@code --add-reads} command-line options. Directives are
      * separated by {@code ;}; targets within a directive by {@code ,}. {@code addExports}/{@code addOpens}
      * read {@code module/package=target...}, {@code addReads} reads {@code module=target...}; a target is a
-     * module name or {@code ALL-UNNAMED}.
+     * module name or {@code ALL-UNNAMED}. {@code enableNativeAccess} is the equivalent of
+     * {@code --enable-native-access}: a comma-separated list of bundled module names. The class path has no
+     * module to name here; its native access is the {@code Enable-Native-Access: ALL-UNNAMED} attribute of
+     * this jar's own manifest, which the JVM reads for {@code java -jar} and which also lets this launcher
+     * grant the named modules without a warning of its own.
      */
     private static void grantAccess(ModuleLayer.Controller controller, ModuleLayer layer, ClassLoader loader,
                                     Properties application) {
+        String nativeAccess = application.getProperty("enableNativeAccess");
+        if (nativeAccess != null) {
+            for (String module : nativeAccess.split(",")) {
+                String name = module.strip();
+                if (!name.isEmpty()) {
+                    controller.enableNativeAccess(source(layer, name));
+                }
+            }
+        }
         for (Directive directive : directives(application.getProperty("addExports"), true)) {
             controller.addExports(source(layer, directive.module()), directive.packageName(),
                     target(directive.target(), layer, loader));
@@ -520,7 +559,8 @@ public final class Launcher {
 
     private static Module source(ModuleLayer layer, String module) {
         return layer.findModule(module).orElseThrow(() ->
-                new IllegalStateException("Module named by addExports/addOpens/addReads is not bundled: " + module));
+                new IllegalStateException("Module named by addExports/addOpens/addReads/enableNativeAccess is not bundled: "
+                        + module));
     }
 
     private static Module target(String target, ModuleLayer layer, ClassLoader loader) {
