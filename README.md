@@ -84,6 +84,14 @@ application a build produced. A layer on
 disk is read from those files the way `java -p … -cp …` reads any module graph; the in-memory reading above
 is only for the case that has no files to name. The same code runs either way.
 
+Native access follows the same split. `enableNativeAccess` in the descriptor names the application's modules
+that are granted it, as `--enable-native-access` would; the class path is reached only by the
+`Enable-Native-Access: ALL-UNNAMED` attribute of the executable jar's own manifest. A layer's modules exist
+only once the layer is defined, so `enableNativeAccess.<name>` in the descriptor, or
+`jlayer.enableNativeAccess.<name>` for a layer on disk, names the modules of that layer that are granted it
+when `Launcher.layer` defines it. Granting is itself restricted, so the launcher needs native access of its
+own to grant without a warning.
+
 Nesting needs nothing further: `Launcher.layer` parents a layer on its *caller's*, so a module sitting
 inside one layer that asks for another gets a child of the first, and the API module it shares resolves
 from there rather than from the application.
@@ -116,7 +124,8 @@ exploded-bundle fixtures with the JDK Class-File API and drives `Launcher#run` e
   metadata and sealing from the manifest, a sealing violation across class-path jars, a module class's
   `CodeSource` location, and signer identity reconstructed from a `signature.<dep>` property.
 - **Agents and grants** - `premain` in declaration order with arguments, `agentmain` on attach, an agent
-  bundle with no main started through `runAgents`, and `addExports` / `addOpens` / `addReads`.
+  bundle with no main started through `runAgents`, `addExports` / `addOpens` / `addReads`, and
+  `enableNativeAccess` for the application and for a layer.
 
 A change to how the graph is assembled should arrive with the test that pins the behaviour it changes.
 

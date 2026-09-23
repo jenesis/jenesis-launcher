@@ -41,7 +41,8 @@ final class Archive implements Closeable {
      * declaring module instead would have required the caller to be a named module, which a jar cannot
      * promise: whoever consumes it decides whether it lands on the module path or the class path.</p>
      */
-    static final String LAYER_MODULE_PATH = "modulepath.", LAYER_CLASS_PATH = "classpath.";
+    static final String LAYER_MODULE_PATH = "modulepath.", LAYER_CLASS_PATH = "classpath.",
+            LAYER_NATIVE_ACCESS = "enableNativeAccess.";
 
     /** Reads bytes and openable URLs for entries of the outer jar or directory, on demand. */
     interface Source extends Closeable {
