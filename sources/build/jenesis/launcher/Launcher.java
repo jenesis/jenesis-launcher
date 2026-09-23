@@ -135,6 +135,9 @@ public final class Launcher {
             Archive archive = bundle(caller);
             Archive.Layer bundled = archive == null ? null : archive.layers().get(name);
             if (bundled == null) {
+                if (archive != null) {
+                    archive.close();
+                }
                 List<Path> modulepath = paths(name, Archive.LAYER_MODULE_PATH);
                 ModuleFinder finder = ModuleFinder.of(modulepath.toArray(Path[]::new));
                 java.lang.module.Configuration configuration = parent.configuration().resolveAndBind(
@@ -149,15 +152,24 @@ public final class Launcher {
                         ModuleLayer.defineModulesWithOneLoader(configuration, List.of(parent),
                                 unnamed(paths(name, Archive.LAYER_CLASS_PATH))));
             }
-            InMemoryModuleFinder finder = new InMemoryModuleFinder(bundled.modulepath());
-            java.lang.module.Configuration configuration = parent.configuration()
-                    .resolveAndBind(finder, ModuleFinder.of(), finder.moduleNames());
-            verify(name, configuration);
-            InMemoryClassLoader loader = new InMemoryClassLoader(archive, bundled.classpath(), finder,
-                    ClassLoader.getPlatformClassLoader());
-            loader.remote(configuration, List.of(parent));
-            return enableNativeAccess(lookup, name, archive.application().getProperty(Archive.LAYER_NATIVE_ACCESS + name),
-                    ModuleLayer.defineModules(configuration, List.of(parent), _ -> loader));
+            try {
+                InMemoryModuleFinder finder = new InMemoryModuleFinder(bundled.modulepath());
+                java.lang.module.Configuration configuration = parent.configuration()
+                        .resolveAndBind(finder, ModuleFinder.of(), finder.moduleNames());
+                verify(name, configuration);
+                InMemoryClassLoader loader = new InMemoryClassLoader(archive, bundled.classpath(), finder,
+                        ClassLoader.getPlatformClassLoader());
+                loader.remote(configuration, List.of(parent));
+                return enableNativeAccess(lookup, name, archive.application().getProperty(Archive.LAYER_NATIVE_ACCESS + name),
+                        ModuleLayer.defineModules(configuration, List.of(parent), _ -> loader));
+            } catch (RuntimeException | IOException | Error e) {
+                try {
+                    archive.close();
+                } catch (IOException suppressed) {
+                    e.addSuppressed(suppressed);
+                }
+                throw e;
+            }
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to define layer " + name + " for " + module, e);
         }

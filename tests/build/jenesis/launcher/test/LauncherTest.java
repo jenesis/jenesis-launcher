@@ -1313,7 +1313,7 @@ class LauncherTest {
 
         assertThatThrownBy(() -> launch(bundle, "jenesis.test.unnamed"))
                 .hasStackTraceContaining("holds 1 jars and names none of them")
-                .hasStackTraceContaining("classpath, modulepath and layer.* are all absent");
+                .hasStackTraceContaining("classpath, modulepath, modulepath.<name> and classpath.<name> are all absent");
     }
 
     @Test
