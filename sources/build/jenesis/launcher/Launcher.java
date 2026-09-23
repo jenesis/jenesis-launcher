@@ -35,9 +35,6 @@ public final class Launcher {
      */
     private static final String LAYER_PATH = "jlayer.";
 
-    private static final StackWalker WALKER =
-            StackWalker.getInstance(StackWalker.Option.RETAIN_CLASS_REFERENCE);
-
     private static final Map<Module, Map<String, ModuleLayer>> LAYERS = new ConcurrentHashMap<>();
 
     /**
@@ -52,9 +49,13 @@ public final class Launcher {
     }
 
     /**
-     * The module layer the calling module declared under {@code name}, defined once and cached. The layer is
-     * a child of the caller's own, so every module it does not itself hold - the API module the caller and
-     * the layer share above all - resolves from the caller's layer and is the very same class on both sides.
+     * The module layer the calling module declared under {@code name}, defined once and cached. The caller is
+     * the class of {@code lookup}, which must be the full-privilege lookup that class created with
+     * {@link MethodHandles#lookup()}: a caller is named rather than read off the stack, so that what the layer
+     * is granted is decided by the module that asked for it, and handing that lookup on is that module's own
+     * decision. The layer is a child of the caller's own, so every module it does not itself hold - the API
+     * module the caller and the layer share above all - resolves from the caller's layer and is the very same
+     * class on both sides.
      *
      * <p>A layer is named on its own. That is already how the build keys it - the {@code layer:<name>}
      * group it resolves in, and the pins written against it - so a name is global and a duplicate is
@@ -69,10 +70,19 @@ public final class Launcher {
      * <p>The modules come from this jar when the caller runs inside a bundle that declares them, read on
      * demand like every other bundled class; otherwise from the path named by
      * {@code jlayer.<path>.<name>}, which is how a deployment that unpacked its dependencies supplies
-     * them.</p>
+     * them. Native access is granted to the modules {@code enableNativeAccess.<name>} names through
+     * {@code lookup}, so the JDK allows it only where the calling module has native access itself.</p>
+     *
+     * @throws IllegalArgumentException if {@code lookup} does not have full privilege access.
      */
-    public static ModuleLayer layer(String name) {
-        return layer(WALKER.getCallerClass(), name);
+    public static ModuleLayer layer(MethodHandles.Lookup lookup, String name) {
+        if (!lookup.hasFullPrivilegeAccess()) {
+            throw new IllegalArgumentException("A layer is defined for the class whose lookup is passed, so the"
+                    + " lookup must have full privilege access - pass MethodHandles.lookup() from the calling"
+                    + " class, not " + lookup);
+        }
+        return LAYERS.computeIfAbsent(lookup.lookupClass().getModule(), _ -> new ConcurrentHashMap<>())
+                .computeIfAbsent(name, key -> define(lookup, key));
     }
 
     /**
@@ -85,8 +95,10 @@ public final class Launcher {
      * The calling module needs no {@code uses} clause: the call names the service, which is the declaration
      * this mechanism actually goes on.</p>
      */
-    public static <S> ServiceLoader<S> load(String name, Class<S> service) {
-        return load(WALKER.getCallerClass(), name, service);
+    public static <S> ServiceLoader<S> load(MethodHandles.Lookup lookup, String name, Class<S> service) {
+        ModuleLayer layer = layer(lookup, name);
+        Launcher.class.getModule().addUses(service);
+        return ServiceLoader.load(layer, service);
     }
 
     /**
@@ -96,8 +108,8 @@ public final class Launcher {
      *
      * @throws IllegalStateException if the layer provides no implementation, or more than one.
      */
-    public static <S> S instance(String name, Class<S> service) {
-        List<ServiceLoader.Provider<S>> providers = load(WALKER.getCallerClass(), name, service)
+    public static <S> S instance(MethodHandles.Lookup lookup, String name, Class<S> service) {
+        List<ServiceLoader.Provider<S>> providers = load(lookup, name, service)
                 .stream()
                 .toList();
         if (providers.isEmpty()) {
@@ -114,22 +126,8 @@ public final class Launcher {
         return providers.getFirst().get();
     }
 
-    /**
-     * Resolves the layer for an explicit caller, which is what both public forms need: reading the caller
-     * off the stack a second time would find this class rather than whoever called it.
-     */
-    private static <S> ServiceLoader<S> load(Class<?> caller, String name, Class<S> service) {
-        ModuleLayer layer = layer(caller, name);
-        Launcher.class.getModule().addUses(service);
-        return ServiceLoader.load(layer, service);
-    }
-
-    private static ModuleLayer layer(Class<?> caller, String name) {
-        return LAYERS.computeIfAbsent(caller.getModule(), _ -> new ConcurrentHashMap<>())
-                .computeIfAbsent(name, key -> define(caller, key));
-    }
-
-    private static ModuleLayer define(Class<?> caller, String name) {
+    private static ModuleLayer define(MethodHandles.Lookup lookup, String name) {
+        Class<?> caller = lookup.lookupClass();
         Module module = caller.getModule();
         ModuleLayer own = module.getLayer(), hosted = application;
         ModuleLayer parent = own != null ? own : hosted != null ? hosted : ModuleLayer.boot();
@@ -147,7 +145,7 @@ public final class Launcher {
                                 .map(reference -> reference.descriptor().name())
                                 .collect(Collectors.toUnmodifiableSet()));
                 verify(name, configuration);
-                return enableNativeAccess(name, System.getProperty(LAYER_PATH + Archive.LAYER_NATIVE_ACCESS + name),
+                return enableNativeAccess(lookup, name, System.getProperty(LAYER_PATH + Archive.LAYER_NATIVE_ACCESS + name),
                         ModuleLayer.defineModulesWithOneLoader(configuration, List.of(parent),
                                 unnamed(paths(name, Archive.LAYER_CLASS_PATH))));
             }
@@ -158,7 +156,7 @@ public final class Launcher {
             InMemoryClassLoader loader = new InMemoryClassLoader(archive, bundled.classpath(), finder,
                     ClassLoader.getPlatformClassLoader());
             loader.remote(configuration, List.of(parent));
-            return enableNativeAccess(name, archive.application().getProperty(Archive.LAYER_NATIVE_ACCESS + name),
+            return enableNativeAccess(lookup, name, archive.application().getProperty(Archive.LAYER_NATIVE_ACCESS + name),
                     ModuleLayer.defineModules(configuration, List.of(parent), _ -> loader));
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to define layer " + name + " for " + module, e);
@@ -169,19 +167,39 @@ public final class Launcher {
      * Grants native access to the modules of a freshly defined layer that {@code declaration} names, a
      * comma-separated list read from {@code jlayer.enableNativeAccess.<name>} for a layer on disk or from
      * {@code enableNativeAccess.<name>} in the bundled descriptor - the layer's equivalent of
-     * {@code --enable-native-access}, which cannot name a module the boot layer does not hold. A layer's
-     * class path is an unnamed module, which only {@code ALL-UNNAMED} on the command line or in the
-     * manifest reaches. Granting is itself a restricted operation, so the launcher needs native access of
-     * its own to do it without a warning; the build grants it wherever it grants a layer.
+     * {@code --enable-native-access}, which cannot name a module the boot layer does not hold. The grant is
+     * made through the caller's {@code lookup}, so the JDK checks the module that asked for the layer rather
+     * than this launcher: a caller without native access is warned about or refused exactly as if it had
+     * called {@link ModuleLayer.Controller#enableNativeAccess} itself, and neither a rewritten property nor
+     * a layer this launcher defines gives it more. A layer's class path is an unnamed module, which only
+     * {@code ALL-UNNAMED} on the command line or in the manifest reaches.
      */
-    private static ModuleLayer enableNativeAccess(String name, String declaration, ModuleLayer.Controller controller) {
-        if (declaration != null) {
-            for (String entry : declaration.split(",")) {
-                String module = entry.strip();
-                if (!module.isEmpty()) {
-                    controller.enableNativeAccess(controller.layer().findModule(module).orElseThrow(() ->
-                            new IllegalStateException("Layer " + name + " holds no module " + module
-                                    + " to enable native access for")));
+    private static ModuleLayer enableNativeAccess(MethodHandles.Lookup lookup,
+                                                  String name,
+                                                  String declaration,
+                                                  ModuleLayer.Controller controller) {
+        if (declaration == null || declaration.isBlank()) {
+            return controller.layer();
+        }
+        MethodHandle grant;
+        try {
+            grant = lookup.findVirtual(ModuleLayer.Controller.class, "enableNativeAccess",
+                    MethodType.methodType(ModuleLayer.Controller.class, Module.class));
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Cannot grant native access in layer " + name + " through " + lookup, e);
+        }
+        for (String entry : declaration.split(",")) {
+            String module = entry.strip();
+            if (!module.isEmpty()) {
+                Module target = controller.layer().findModule(module).orElseThrow(() ->
+                        new IllegalStateException("Layer " + name + " holds no module " + module
+                                + " to enable native access for"));
+                try {
+                    grant.invoke(controller, target);
+                } catch (RuntimeException | Error e) {
+                    throw e;
+                } catch (Throwable e) {
+                    throw new IllegalStateException("Cannot grant native access to " + module + " in layer " + name, e);
                 }
             }
         }

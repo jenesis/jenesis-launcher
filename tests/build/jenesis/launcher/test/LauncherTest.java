@@ -1205,6 +1205,14 @@ class LauncherTest {
     }
 
     @Test
+    void refusesALookupWithoutFullPrivilegeAccess() {
+        assertThatThrownBy(() -> Launcher.layer(MethodHandles.publicLookup(), "render"))
+                .as("a layer belongs to the class of the lookup, so only that class may hand one over")
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("MethodHandles.lookup()");
+    }
+
+    @Test
     void refusesNativeAccessForAModuleALayerDoesNotHold() throws Exception {
         Path bundle = directory.resolve("layered-unknown-native.jar");
         TestJars.writeBundle(bundle,
