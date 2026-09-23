@@ -50,7 +50,7 @@ module my.library {
     requires my.library.spi;          // the API module, shared with the layer
 }
 
-Renderer r = Launcher.instance("render", Renderer.class);
+Renderer r = Launcher.instance(MethodHandles.lookup(), "render", Renderer.class);
 ```
 
 The layer's dependencies are bundled among the application's in the same `jars/` store, and
@@ -89,13 +89,17 @@ that are granted it, as `--enable-native-access` would; the class path is reache
 `Enable-Native-Access: ALL-UNNAMED` attribute of the executable jar's own manifest. A layer's modules exist
 only once the layer is defined, so `enableNativeAccess.<name>` in the descriptor, or
 `jlayer.enableNativeAccess.<name>` for a layer on disk, names the modules of that layer that are granted it
-when `Launcher.layer` defines it. Granting is itself restricted, so the launcher needs native access of its
-own to grant without a warning.
+when `Launcher.layer` defines it. That grant is made through the lookup the calling module passes, so the
+JDK checks the calling module rather than the launcher: a module without native access of its own is warned
+about or refused exactly as if it had granted the layer itself, and cannot gain more through the launcher.
+Only the application's own modules are granted by the launcher, which is why the executable jar carries
+`Enable-Native-Access: ALL-UNNAMED`.
 
 System properties can be rewritten by any code while the JVM runs, and the launcher reads a layer's `jlayer.*`
 properties only when it defines the layer. Code that runs before then - in the application or in an outer
 layer - can therefore change which jars an inner layer on disk holds and which of its modules are granted
-native access. A layer bundled in a launcher jar is read from the jar and is not affected.
+native access, though never beyond what the calling module could grant itself. A layer bundled in a launcher
+jar is read from the jar and is not affected.
 
 Nesting needs nothing further: `Launcher.layer` parents a layer on its *caller's*, so a module sitting
 inside one layer that asks for another gets a child of the first, and the API module it shares resolves

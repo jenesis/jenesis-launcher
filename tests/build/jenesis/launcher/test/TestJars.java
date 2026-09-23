@@ -14,6 +14,8 @@ import java.lang.constant.MethodTypeDesc;
 final class TestJars {
 
     private static final ClassDesc CD_System = ClassDesc.of("java.lang.System");
+    private static final ClassDesc CD_MethodHandles = ClassDesc.of("java.lang.invoke.MethodHandles");
+    private static final ClassDesc CD_Lookup = ClassDesc.of("java.lang.invoke.MethodHandles$Lookup");
     private static final ClassDesc CD_Thread = ClassDesc.of("java.lang.Thread");
     private static final ClassDesc CD_ClassLoader = ClassDesc.of("java.lang.ClassLoader");
     private static final ClassDesc CD_InputStream = ClassDesc.of("java.io.InputStream");
@@ -542,10 +544,11 @@ final class TestJars {
         ClassDesc cdClass = ClassDesc.of("java.lang.Class");
         return main(binaryName, code -> code
                 .aload(0).iconst_0().aaload()
+                .invokestatic(CD_MethodHandles, "lookup", MethodTypeDesc.of(CD_Lookup))
                 .loadConstant(layer)
                 .loadConstant(ClassDesc.of(service))
                 .invokestatic(cdLauncher, "instance",
-                        MethodTypeDesc.of(ConstantDescs.CD_Object, ConstantDescs.CD_String, cdClass))
+                        MethodTypeDesc.of(ConstantDescs.CD_Object, CD_Lookup, ConstantDescs.CD_String, cdClass))
                 .invokevirtual(ConstantDescs.CD_Object, "getClass", MethodTypeDesc.of(cdClass))
                 .invokevirtual(cdClass, "getName", MethodTypeDesc.of(ConstantDescs.CD_String))
                 .invokestatic(CD_System, "setProperty",
@@ -562,10 +565,11 @@ final class TestJars {
         ClassDesc cdClass = ClassDesc.of("java.lang.Class");
         return main(binaryName, code -> code
                 .aload(0).iconst_0().aaload()
+                .invokestatic(CD_MethodHandles, "lookup", MethodTypeDesc.of(CD_Lookup))
                 .loadConstant(layer)
                 .loadConstant(ClassDesc.of(service))
                 .invokestatic(cdLauncher, "load",
-                        MethodTypeDesc.of(cdServiceLoader, ConstantDescs.CD_String, cdClass))
+                        MethodTypeDesc.of(cdServiceLoader, CD_Lookup, ConstantDescs.CD_String, cdClass))
                 .invokevirtual(cdServiceLoader, "findFirst", MethodTypeDesc.of(cdOptional))
                 .invokevirtual(cdOptional, "orElseThrow", MethodTypeDesc.of(ConstantDescs.CD_Object))
                 .invokevirtual(ConstantDescs.CD_Object, "getClass", MethodTypeDesc.of(cdClass))
