@@ -92,6 +92,11 @@ only once the layer is defined, so `enableNativeAccess.<name>` in the descriptor
 when `Launcher.layer` defines it. Granting is itself restricted, so the launcher needs native access of its
 own to grant without a warning.
 
+System properties can be rewritten by any code while the JVM runs, and the launcher reads a layer's `jlayer.*`
+properties only when it defines the layer. Code that runs before then - in the application or in an outer
+layer - can therefore change which jars an inner layer on disk holds and which of its modules are granted
+native access. A layer bundled in a launcher jar is read from the jar and is not affected.
+
 Nesting needs nothing further: `Launcher.layer` parents a layer on its *caller's*, so a module sitting
 inside one layer that asks for another gets a child of the first, and the API module it shares resolves
 from there rather than from the application.
