@@ -17,11 +17,21 @@ import module java.instrument;
  * loader; invoke {@code premain} on each agent named by {@code agentClass} before the main class is loaded;
  * then invoke {@code main}.</p>
  *
+ * <p>That loader is parented on the platform class loader. {@code java -jar foo.jar} makes the outer jar the
+ * system class path, and its root - this launcher, the descriptor, the jar's own manifest - is no part of the
+ * application: below the system class loader, the application would find all of it, and find it first,
+ * where {@code java -p modulepath -cp classpath} shows it nothing but the two paths. A class of a boot layer
+ * module stays reachable, the JDK's tool modules among them, because the platform loader hands it to the
+ * loader that defines it. A {@link ServiceLoader} over the application's loader does not walk the system
+ * class loader, so it finds no provider in those tool modules; {@code java.util.spi.ToolProvider.findFirst}
+ * and {@code javax.tools.ToolProvider} look them up through the system class loader and still do.</p>
+ *
  * <p>A bundle with no {@code mainClass} is instead a self-contained Java agent: referenced as
  * {@code -javaagent:foo.jar} or attached dynamically, {@link LauncherAgent} enters {@link #runAgents} to
  * build the same isolated loader and run the bundled agents' {@code premain}/{@code agentmain} against the
  * host's {@link Instrumentation} - the agent's dependencies stay in the bundle's loader, off the host's
- * class path.</p>
+ * class path. Its loader keeps the system class loader as its parent, because a {@code -javaagent} jar joins
+ * the system class path and its agents share that loader with the host, whose classes they reach.</p>
  *
  * <p>The boot module layer is immutable, so modular dependencies necessarily form a new layer rather than
  * joining the system loader; this is the faithful, supported way to keep them modular.</p>
@@ -329,7 +339,7 @@ public final class Launcher {
             throw new IllegalStateException("No 'mainClass' declared in " + Archive.APPLICATION
                     + " of " + location);
         }
-        InMemoryClassLoader loader = prepare(archive);
+        InMemoryClassLoader loader = prepare(archive, ClassLoader.getPlatformClassLoader());
         Thread.currentThread().setContextClassLoader(loader);
         // Run agents before the main class is loaded, mirroring `-javaagent`: a ClassFileTransformer a
         // premain registers must be in place for the JVM to apply it to the main class being defined.
@@ -355,7 +365,7 @@ public final class Launcher {
             archive.close();
             return;
         }
-        InMemoryClassLoader loader = prepare(archive);
+        InMemoryClassLoader loader = prepare(archive, ClassLoader.getSystemClassLoader());
         // Set the context loader only while the agents start, then restore it: the host application keeps
         // running on this thread afterwards and must not inherit the bundle's loader.
         ClassLoader previous = Thread.currentThread().getContextClassLoader();
@@ -387,12 +397,13 @@ public final class Launcher {
      * just as {@code java -p modulepath -cp classpath} does (automatic modules read the class path while named
      * ones cannot, and a module shadows a same-named class-path package). Grants this launcher access to a
      * modular main package and applies the {@code addExports}/{@code addOpens}/{@code addReads} and
-     * {@code enableNativeAccess} properties.
+     * {@code enableNativeAccess} properties. {@code parent} is the platform class loader for an application,
+     * which keeps the outer jar's root out of its sight, and the system class loader for an agent bundle,
+     * whose agents share it with the host as {@code -javaagent} agents do.
      */
-    private static InMemoryClassLoader prepare(Archive archive) throws Exception {
+    private static InMemoryClassLoader prepare(Archive archive, ClassLoader parent) throws Exception {
         String mainClass = archive.application().getProperty("mainClass");
         String mainModule = archive.application().getProperty("mainModule");
-        ClassLoader system = ClassLoader.getSystemClassLoader();
         InMemoryClassLoader loader;
         ModuleLayer.Controller controller = null;
         ModuleLayer layer = null;
@@ -416,12 +427,12 @@ public final class Launcher {
                     .resolveAndBind(finder, ModuleFinder.of(), roots);
             // Resolve and construct the loader first: defineModules records each module's packages against
             // the loader, after which class loading may begin.
-            loader = new InMemoryClassLoader(archive, finder, system);
+            loader = new InMemoryClassLoader(archive, finder, parent);
             controller = ModuleLayer.defineModules(configuration, List.of(ModuleLayer.boot()), _ -> loader);
             layer = controller.layer();
             application = layer;
         } else {
-            loader = new InMemoryClassLoader(archive, null, system);
+            loader = new InMemoryClassLoader(archive, null, parent);
         }
         if (controller != null && mainModule != null && !mainModule.isBlank()
                 && mainClass != null && !mainClass.isBlank()) {

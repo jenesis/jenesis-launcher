@@ -1117,6 +1117,74 @@ class LauncherTest {
     }
 
     @Test
+    void hidesWhatTheSystemClassLoaderHoldsFromTheApplication() throws Exception {
+        Path bundle = directory.resolve("hidden-launcher.jar");
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.hidden.Main"),
+                Map.of("app.jar", TestJars.classJar("demo.hidden.Main",
+                        TestJars.resourceUrlMain("demo.hidden.Main", "build/jenesis/launcher/Launcher.class"))),
+                Map.of());
+
+        String key = "jenesis.test.hidden.launcher";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key))
+                .as("the launcher's own class file sits with the system class loader, which is no parent of the application")
+                .isEqualTo("null");
+    }
+
+    @Test
+    void keepsTheSystemClassLoaderVisibleToTheAgentsOfAnAgentBundle() throws Exception {
+        String key = "jenesis.test.agent.parent";
+        Path bundle = directory.resolve("agent-parent.jar");
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put(TestJars.DESCRIPTOR, properties(Map.of("agentClass", "demo.agent.Probe", "classpath", "probe.jar")));
+        entries.put("jars/probe.jar/demo/agent/Probe.class",
+                TestJars.resourceUrlPremain("demo.agent.Probe", key, "build/jenesis/launcher/Launcher.class"));
+        Files.write(bundle, TestJars.jar(entries));
+
+        System.clearProperty(key);
+        Launcher.runAgents(bundle, false, null, null);
+
+        assertThat(System.getProperty(key))
+                .as("an agent bundle shares the system class loader with its host, as a -javaagent jar does")
+                .endsWith("build/jenesis/launcher/Launcher.class");
+    }
+
+    @Test
+    void showsAnApplicationRunWithJavaJarNothingOfTheOuterJarsRoot() throws Exception {
+        Path bundle = directory.resolve("java-jar.jar");
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("demo/jar/Main.class", TestJars.printResourcesMain("demo.jar.Main", 4));
+        entries.put("application.properties", "greeting=own".getBytes(StandardCharsets.UTF_8));
+        TestJars.writeExecutableJar(bundle, Map.of("mainClass", "demo.jar.Main"), Map.of("app.jar", TestJars.jar(entries)));
+        Path errors = directory.resolve("java-jar.err");
+
+        Process process = new ProcessBuilder(
+                Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+                "-jar",
+                bundle.toString(),
+                "application.properties",
+                TestJars.DESCRIPTOR,
+                "build/jenesis/launcher/Launcher.class",
+                "META-INF/MANIFEST.MF")
+                .redirectError(errors.toFile())
+                .start();
+        List<String> lines = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).lines().toList();
+        assertThat(process.waitFor()).as(Files.readString(errors)).isZero();
+
+        String own = "jar:" + bundle.toAbsolutePath().toUri() + "!/jars/app.jar/application.properties";
+        assertThat(lines)
+                .as("the application finds its own application.properties and nothing of the outer jar's root")
+                .containsExactly(
+                        "application.properties " + own + " [" + own + "]",
+                        TestJars.DESCRIPTOR + " null []",
+                        "build/jenesis/launcher/Launcher.class null []",
+                        "META-INF/MANIFEST.MF null []");
+    }
+
+    @Test
     void bundledModuleShadowsASamePackageClassTheOuterJarAlsoCarries() throws Exception {
         Path bundle = directory.resolve("shadowing.jar");
         byte[] shadowing = TestJars.modularJar("demo.shadowing",

@@ -12,6 +12,12 @@ import java.util.jar.Attributes;
  * launch works: one application loader hosts the named modules and the unnamed module together, with the
  * {@link ModuleLayer} as metadata on top.
  *
+ * <p>An application's loader is parented on the platform class loader rather than on the system class
+ * loader, whose class path is the outer jar: its root - the launcher, the descriptor, the jar's own manifest
+ * - is no part of the application, and a parent-first lookup would answer from it before the application's
+ * own jars. An agent bundle's loader is parented on the system class loader, which a {@code -javaagent}
+ * jar's agents share with the host.</p>
+ *
  * <p>It holds no class or resource bytes - only the {@link Archive.Jar} handles and a package-to-module
  * index. Class and resource bytes are read from the still-open outer jar (or directory) on demand and
  * discarded after {@link #defineClass}. On the class path the first jar in the declared class-path order
@@ -57,9 +63,9 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
      * real {@code -cp}. This is for a layer bundled inside the jar, which has no file to name; a layer on
      * disk is read from its files by the JDK's own finder and loader.
      *
-     * <p>Unlike the application's loader, a layer's class path shadows the parent rather than deferring to
-     * it. The parent here is the caller's own loader, which is where the version the layer exists to hide
-     * lives; deferring to it would hand the layer that very version back.</p>
+     * <p>Its parent is the platform class loader rather than the caller's own loader, which is where the
+     * version the layer exists to hide lives; deferring to it would hand the layer that very version back.
+     * What the layer reads of the layers above it is reached through {@link #remote} instead.</p>
      */
     InMemoryClassLoader(Archive archive, List<Archive.Jar> classpath, InMemoryModuleFinder finder,
                         ClassLoader parent) throws IOException {

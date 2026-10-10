@@ -5,6 +5,7 @@ import module java.base;
 import java.lang.constant.ClassDesc;
 import java.lang.constant.ConstantDescs;
 import java.lang.constant.MethodTypeDesc;
+import build.jenesis.launcher.Launcher;
 
 /**
  * Synthesises class files, nested jars, and outer executable-jar fixtures in memory, so the launcher
@@ -22,6 +23,7 @@ final class TestJars {
     private static final ClassDesc CD_Thread = ClassDesc.of("java.lang.Thread");
     private static final ClassDesc CD_ClassLoader = ClassDesc.of("java.lang.ClassLoader");
     private static final ClassDesc CD_InputStream = ClassDesc.of("java.io.InputStream");
+    private static final ClassDesc CD_URL = ClassDesc.of("java.net.URL");
     private static final ClassDesc CD_Module = ClassDesc.of("java.lang.Module");
     private static final ClassDesc CD_ModuleDescriptor = ClassDesc.of("java.lang.module.ModuleDescriptor");
     private static final ClassDesc CD_Optional = ClassDesc.of("java.util.Optional");
@@ -294,6 +296,82 @@ final class TestJars {
                         MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String, ConstantDescs.CD_String))
                 .pop()
                 .return_());
+    }
+
+    /**
+     * A class whose {@code main} stores the URL its own loader answers for {@code resource} into
+     * {@code System.setProperty(args[0], String.valueOf(getClassLoader().getResource(resource)))} - {@code "null"}
+     * when the resource is out of the application's sight.
+     */
+    static byte[] resourceUrlMain(String binaryName, String resource) {
+        return main(binaryName, code -> code
+                .aload(0).iconst_0().aaload()
+                .loadConstant(ClassDesc.of(binaryName))
+                .invokevirtual(ConstantDescs.CD_Class, "getClassLoader", MethodTypeDesc.of(CD_ClassLoader))
+                .loadConstant(resource)
+                .invokevirtual(CD_ClassLoader, "getResource", MethodTypeDesc.of(CD_URL, ConstantDescs.CD_String))
+                .invokestatic(ConstantDescs.CD_String, "valueOf",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_Object))
+                .invokestatic(CD_System, "setProperty",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String, ConstantDescs.CD_String))
+                .pop()
+                .return_());
+    }
+
+    /** As {@link #resourceUrlMain}, as an agent's {@code premain(String)} storing into {@code key}. */
+    static byte[] resourceUrlPremain(String binaryName, String key, String resource) {
+        return premain(binaryName, code -> code
+                .loadConstant(key)
+                .loadConstant(ClassDesc.of(binaryName))
+                .invokevirtual(ConstantDescs.CD_Class, "getClassLoader", MethodTypeDesc.of(CD_ClassLoader))
+                .loadConstant(resource)
+                .invokevirtual(CD_ClassLoader, "getResource", MethodTypeDesc.of(CD_URL, ConstantDescs.CD_String))
+                .invokestatic(ConstantDescs.CD_String, "valueOf",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_Object))
+                .invokestatic(CD_System, "setProperty",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String, ConstantDescs.CD_String))
+                .pop()
+                .return_());
+    }
+
+    /**
+     * A class whose {@code main} prints, for each of its first {@code count} arguments, one line of the
+     * argument, what its own loader's {@code getResource} answers for it and what its {@code getResources}
+     * lists - for an application run in a JVM of its own, where nothing but its output is observable.
+     */
+    static byte[] printResourcesMain(String binaryName, int count) {
+        ClassDesc printStream = ClassDesc.of("java.io.PrintStream");
+        ClassDesc enumeration = ClassDesc.of("java.util.Enumeration");
+        ClassDesc collections = ClassDesc.of("java.util.Collections");
+        ClassDesc arrayList = ClassDesc.of("java.util.ArrayList");
+        MethodTypeDesc concat = MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String);
+        MethodTypeDesc valueOf = MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_Object);
+        return main(binaryName, code -> {
+            code.loadConstant(ClassDesc.of(binaryName))
+                    .invokevirtual(ConstantDescs.CD_Class, "getClassLoader", MethodTypeDesc.of(CD_ClassLoader))
+                    .astore(1);
+            for (int index = 0; index < count; index++) {
+                code.getstatic(CD_System, "out", printStream)
+                        .aload(0).loadConstant(index).aaload()
+                        .astore(2)
+                        .aload(2)
+                        .loadConstant(" ")
+                        .invokevirtual(ConstantDescs.CD_String, "concat", concat)
+                        .aload(1).aload(2)
+                        .invokevirtual(CD_ClassLoader, "getResource", MethodTypeDesc.of(CD_URL, ConstantDescs.CD_String))
+                        .invokestatic(ConstantDescs.CD_String, "valueOf", valueOf)
+                        .invokevirtual(ConstantDescs.CD_String, "concat", concat)
+                        .loadConstant(" ")
+                        .invokevirtual(ConstantDescs.CD_String, "concat", concat)
+                        .aload(1).aload(2)
+                        .invokevirtual(CD_ClassLoader, "getResources", MethodTypeDesc.of(enumeration, ConstantDescs.CD_String))
+                        .invokestatic(collections, "list", MethodTypeDesc.of(arrayList, enumeration))
+                        .invokestatic(ConstantDescs.CD_String, "valueOf", valueOf)
+                        .invokevirtual(ConstantDescs.CD_String, "concat", concat)
+                        .invokevirtual(printStream, "println", MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_String));
+            }
+            code.return_();
+        });
     }
 
     /**
@@ -670,6 +748,40 @@ final class TestJars {
         for (Map<String, byte[]> layer : layers.values()) {
             explode(entries, layer);
         }
+        Files.write(target, jar(entries));
+    }
+
+    /**
+     * Writes a jar that {@code java -jar} runs as the build would write it: the launcher's own classes in the
+     * root as its {@code Main-Class}, the descriptor, and each class-path dependency exploded into the store.
+     * The launcher's classes are read from the module the tests run against, so the jar starts the code
+     * under test.
+     */
+    static void writeExecutableJar(Path target,
+                                   Map<String, String> application,
+                                   Map<String, byte[]> classpath) throws IOException {
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("META-INF/MANIFEST.MF", manifest("Main-Class", Launcher.class.getName()));
+        Module launcher = Launcher.class.getModule();
+        ModuleReference reference = launcher.getLayer().configuration()
+                .findModule(launcher.getName())
+                .orElseThrow()
+                .reference();
+        try (ModuleReader reader = reference.open()) {
+            List<String> classes;
+            try (Stream<String> names = reader.list()) {
+                classes = names.filter(name -> name.startsWith("build/jenesis/launcher/") && name.endsWith(".class"))
+                        .sorted()
+                        .toList();
+            }
+            for (String name : classes) {
+                try (InputStream in = reader.open(name).orElseThrow()) {
+                    entries.put(name, in.readAllBytes());
+                }
+            }
+        }
+        entries.put(DESCRIPTOR, applicationProperties(declare(application, classpath, Map.of(), Map.of())));
+        explode(entries, classpath);
         Files.write(target, jar(entries));
     }
 
