@@ -16,7 +16,7 @@ class LauncherTest {
     Path directory;
 
     // A throwaway self-signed EC certificate (CN=Jenesis Test Signer, O=Jenesis) as Base64 DER, used to
-    // exercise signer-identity reconstruction from a signature.<dep> entry in application.properties.
+    // exercise signer-identity reconstruction from a signature.<dep> entry in the descriptor.
     private static final String TEST_SIGNER_CERT =
             "MIIBeDCCAR6gAwIBAgIJAK+PMEagHyyCMAoGCCqGSM49BAMDMDAxEDAOBgNVBAoTB0plbmVzaXMxHDAaBgNVBAMTE0plbm"
             + "VzaXMgVGVzdCBTaWduZXIwHhcNMjYwNjEwMTA1OTEzWhcNMzYwNjA3MTA1OTEzWjAwMRAwDgYDVQQKEwdKZW5lc2lzMR"
@@ -406,6 +406,46 @@ class LauncherTest {
     }
 
     @Test
+    void servesThePackageDirectoryOfAStoredJarAsAResource() throws Exception {
+        // A class path scan (Spring's component scan among them) starts from getResource("<package>/"), which a
+        // jar answers from its directory entry, so a stored jar must keep answering it.
+        Path bundle = directory.resolve("scan-app.jar");
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("demo/", new byte[0]);
+        entries.put("demo/scan/", new byte[0]);
+        entries.put("demo/scan/Main.class", TestJars.resourceUrlMain("demo.scan.Main", "demo/scan/"));
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.scan.Main"),
+                Map.of("scan.jar", TestJars.jar(entries)),
+                Map.of());
+
+        String key = "jenesis.test.package.directory";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).startsWith("jar:").endsWith("/demo/scan/");
+    }
+
+    @Test
+    void servesThePackageDirectoryOfAnExplodedDirectoryAsAResource() throws Exception {
+        // A directory on a real class path answers getResource("<package>/") with the folder's URL; the
+        // directory layout must do the same rather than answer only regular files.
+        Path bundle = directory.resolve("dir-scan");
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("demo/dscan/Main.class", TestJars.resourceUrlMain("demo.dscan.Main", "demo/dscan/"));
+        TestJars.writeDirectory(bundle,
+                Map.of("mainClass", "demo.dscan.Main"),
+                Map.of("scan.jar", TestJars.jar(entries)),
+                Map.of());
+
+        String key = "jenesis.test.directory.package.directory";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).startsWith("file:").endsWith("/demo/dscan/");
+    }
+
+    @Test
     void confinesDirectoryResourceLookupToBundleRoot() throws Exception {
         // A secret file sits beside the exploded bundle. A class-path resource name that climbs out with
         // ".." must not read it: DirectorySource confines resolved paths to the bundle root, so the lookup
@@ -495,7 +535,7 @@ class LauncherTest {
     @Test
     void reconstructsSignerIdentityFromApplicationProperties() throws Exception {
         // A signed class-path dependency loses its signer when exploded; a signature.<dep> entry in
-        // application.properties carries the signer certificate chain (Base64 PKCS#7), and the launcher
+        // the descriptor carries the signer certificate chain (Base64 PKCS#7), and the launcher
         // reconstructs it onto the CodeSource so getCodeSource().getCertificates() reports the original signer.
         CertificateFactory factory = CertificateFactory.getInstance("X.509");
         X509Certificate certificate = (X509Certificate) factory.generateCertificate(
@@ -506,7 +546,7 @@ class LauncherTest {
 
         Path bundle = directory.resolve("signed-app.jar");
         Map<String, byte[]> entries = new LinkedHashMap<>();
-        entries.put("application.properties",
+        entries.put(TestJars.DESCRIPTOR,
                 properties(Map.of("mainClass", "demo.sig.Main", "classpath", "app.jar", "signature.app.jar", chain)));
         entries.put("jars/app.jar/demo/sig/Main.class", TestJars.codeSourceSignerMain("demo.sig.Main"));
         Files.write(bundle, TestJars.jar(entries));
@@ -524,7 +564,7 @@ class LauncherTest {
         // so getCertificates() is null and reading it throws.
         Path bundle = directory.resolve("unsigned-app.jar");
         Map<String, byte[]> entries = new LinkedHashMap<>();
-        entries.put("application.properties",
+        entries.put(TestJars.DESCRIPTOR,
                 properties(Map.of("mainClass", "demo.sig.Main", "classpath", "app.jar")));
         entries.put("jars/app.jar/demo/sig/Main.class", TestJars.codeSourceSignerMain("demo.sig.Main"));
         Files.write(bundle, TestJars.jar(entries));
@@ -1044,7 +1084,7 @@ class LauncherTest {
         ByteArrayOutputStream props = new ByteArrayOutputStream();
         properties.store(props, null);
         Map<String, byte[]> entries = new LinkedHashMap<>();
-        entries.put("application.properties", props.toByteArray());
+        entries.put(TestJars.DESCRIPTOR, props.toByteArray());
         entries.put("jars/probe.jar/demo/agent/Probe.class", TestJars.argumentPremain("demo.agent.Probe", key));
         entries.put("marker/Marker.class", TestJars.setPropertyMain("marker.Marker"));
         Path bundle = directory.resolve("trampoline-bundle.jar");
@@ -1068,6 +1108,120 @@ class LauncherTest {
         assertThatThrownBy(() -> launch(bundle))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("mainClass");
+    }
+
+    @Test
+    void readsNoDescriptorFromTheJarRoot() throws Exception {
+        Path bundle = directory.resolve("root-descriptor.jar");
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("application.properties", properties(Map.of("mainClass", "demo.cp.Main", "classpath", "app.jar")));
+        entries.put("jars/app.jar/demo/cp/Main.class", TestJars.setPropertyMain("demo.cp.Main"));
+        Files.write(bundle, TestJars.jar(entries));
+
+        assertThatThrownBy(() -> launch(bundle, "jenesis.test.root.descriptor", "ok"))
+                .as("the descriptor is read from META-INF/jenesis/ alone, so a root entry of that name names nothing")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("holds 1 jars and names none of them");
+    }
+
+    @Test
+    void readsTheApplicationsOwnApplicationPropertiesFromItsClassPathRoot() throws Exception {
+        Path bundle = directory.resolve("own-properties.jar");
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("demo/own/Main.class", TestJars.readResourceMain("demo.own.Main", "application.properties"));
+        entries.put("demo/own/Count.class", TestJars.countResourcesMain("demo.own.Count", "application.properties"));
+        entries.put("application.properties", "greeting=own".getBytes(StandardCharsets.UTF_8));
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.own.Main"),
+                Map.of("app.jar", TestJars.jar(entries)),
+                Map.of());
+
+        String key = "jenesis.test.own.properties";
+        System.clearProperty(key);
+        launch(bundle, key);
+        assertThat(System.getProperty(key))
+                .as("getResource answers the application's own file, not the launcher's descriptor")
+                .isEqualTo("greeting=own");
+
+        Path counted = directory.resolve("own-properties-count.jar");
+        TestJars.writeBundle(counted,
+                Map.of("mainClass", "demo.own.Count"),
+                Map.of("app.jar", TestJars.jar(entries)),
+                Map.of());
+        String count = "jenesis.test.own.properties.count";
+        System.clearProperty(count);
+        launch(counted, count);
+        assertThat(System.getProperty(count))
+                .as("getResources answers the application's own file alone")
+                .isEqualTo("1");
+    }
+
+    @Test
+    void hidesWhatTheSystemClassLoaderHoldsFromTheApplication() throws Exception {
+        Path bundle = directory.resolve("hidden-launcher.jar");
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.hidden.Main"),
+                Map.of("app.jar", TestJars.classJar("demo.hidden.Main",
+                        TestJars.resourceUrlMain("demo.hidden.Main", "build/jenesis/launcher/Launcher.class"))),
+                Map.of());
+
+        String key = "jenesis.test.hidden.launcher";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key))
+                .as("the launcher's own class file sits with the system class loader, which is no parent of the application")
+                .isEqualTo("null");
+    }
+
+    @Test
+    void keepsTheSystemClassLoaderVisibleToTheAgentsOfAnAgentBundle() throws Exception {
+        String key = "jenesis.test.agent.parent";
+        Path bundle = directory.resolve("agent-parent.jar");
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put(TestJars.DESCRIPTOR, properties(Map.of("agentClass", "demo.agent.Probe", "classpath", "probe.jar")));
+        entries.put("jars/probe.jar/demo/agent/Probe.class",
+                TestJars.resourceUrlPremain("demo.agent.Probe", key, "build/jenesis/launcher/Launcher.class"));
+        Files.write(bundle, TestJars.jar(entries));
+
+        System.clearProperty(key);
+        Launcher.runAgents(bundle, false, null, null);
+
+        assertThat(System.getProperty(key))
+                .as("an agent bundle shares the system class loader with its host, as a -javaagent jar does")
+                .endsWith("build/jenesis/launcher/Launcher.class");
+    }
+
+    @Test
+    void showsAnApplicationRunWithJavaJarNothingOfTheOuterJarsRoot() throws Exception {
+        Path bundle = directory.resolve("java-jar.jar");
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("demo/jar/Main.class", TestJars.printResourcesMain("demo.jar.Main", 4));
+        entries.put("application.properties", "greeting=own".getBytes(StandardCharsets.UTF_8));
+        TestJars.writeExecutableJar(bundle, Map.of("mainClass", "demo.jar.Main"), Map.of("app.jar", TestJars.jar(entries)));
+        Path errors = directory.resolve("java-jar.err");
+
+        Process process = new ProcessBuilder(
+                Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+                "-jar",
+                bundle.toString(),
+                "application.properties",
+                TestJars.DESCRIPTOR,
+                "build/jenesis/launcher/Launcher.class",
+                "META-INF/MANIFEST.MF")
+                .redirectError(errors.toFile())
+                .start();
+        List<String> lines = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).lines().toList();
+        assertThat(process.waitFor()).as(Files.readString(errors)).isZero();
+
+        String own = "jar:" + bundle.toAbsolutePath().toUri() + "!/jars/app.jar/application.properties";
+        assertThat(lines)
+                .as("the application finds its own application.properties and nothing of the outer jar's root")
+                .containsExactly(
+                        "application.properties " + own + " [" + own + "]",
+                        TestJars.DESCRIPTOR + " null []",
+                        "build/jenesis/launcher/Launcher.class null []",
+                        "META-INF/MANIFEST.MF null []");
     }
 
     @Test
@@ -1307,7 +1461,7 @@ class LauncherTest {
     void refusesABundleThatNamesNoneOfItsJars() throws Exception {
         Path bundle = directory.resolve("unnamed-jars.jar");
         Map<String, byte[]> entries = new LinkedHashMap<>();
-        entries.put("application.properties", properties(Map.of("mainClass", "demo.sig.Main")));
+        entries.put(TestJars.DESCRIPTOR, properties(Map.of("mainClass", "demo.sig.Main")));
         entries.put("jars/app.jar/demo/sig/Main.class", TestJars.setPropertyMain("demo.sig.Main"));
         Files.write(bundle, TestJars.jar(entries));
 
