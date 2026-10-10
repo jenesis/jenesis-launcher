@@ -35,9 +35,11 @@ java -jar foo.jar [args...]              # run it
 java -javaagent:foo.jar=args -jar app.jar   # a hand-assembled jar with no mainClass is an agent
 ```
 
-The build tool writes `mainClass`, `mainModule`, `classpath` and `modulepath` into the jar's
-`application.properties`, naming every jar it stored; the agent, module-access and signer keys the launcher
-also understands are for jars assembled by other means.
+The build tool writes `mainClass`, `mainModule`, `classpath` and `modulepath` into the jar's descriptor,
+`META-INF/jenesis/application.properties`, naming every jar it stored; the agent, module-access and signer keys
+the launcher also understands are for jars assembled by other means. The descriptor sits below
+`META-INF/jenesis/` rather than in the root, so it never takes the name of a file the application carries
+itself, such as an `application.properties` of its own.
 
 ## Module layers
 
@@ -54,7 +56,7 @@ Renderer r = Launcher.instance(MethodHandles.lookup(), "render", Renderer.class)
 ```
 
 The layer's dependencies are bundled among the application's in the same `jars/` store, and
-`modulepath.render=<jar>,<jar>` in `application.properties` says which are its, with a
+`modulepath.render=<jar>,<jar>` in the descriptor says which are its, with a
 `classpath.render` counterpart for the jars that carry no module identity - the application's own keys,
 qualified by the layer's name. A layer splits the two paths
 exactly as the application does, because a library worth isolating usually drags a long tail of jars that
@@ -127,13 +129,17 @@ exploded-bundle fixtures with the JDK Class-File API and drives `Launcher#run` e
 - **Layout and loading** - class-path and modular applications, automatic-module naming, declared class-path
   order, a rejected duplicate module name, split-package shadowing, and a strict module's non-exported main.
 - **Resources** - `jar:` and `file:` URLs from both a jar and an exploded directory, names confined to the
-  bundle root, a bundle path with spaces, `getResources` across a module and the class path, and module
-  resources honouring encapsulation (a non-open package's resource stays hidden).
+  bundle root, a bundle path with spaces, `getResources` across a module and the class path, module
+  resources honouring encapsulation (a non-open package's resource stays hidden), and an application's own
+  `application.properties` read in place of the descriptor.
 - **Faithfulness to the JDK** - multi-release class and resource selection, native-library extraction, package
   metadata and sealing from the manifest, a sealing violation across class-path jars, a module class's
-  `CodeSource` location, and signer identity reconstructed from a `signature.<dep>` property.
+  `CodeSource` location, signer identity reconstructed from a `signature.<dep>` property, and an application
+  started with a real `java -jar` that sees nothing of the outer jar's root - neither the launcher's classes,
+  nor the descriptor, nor the jar's manifest - because its loader is parented on the platform class loader.
 - **Agents and grants** - `premain` in declaration order with arguments, `agentmain` on attach, an agent
-  bundle with no main started through `runAgents`, `addExports` / `addOpens` / `addReads`, and
+  bundle with no main started through `runAgents` on a loader that shares the system class loader with its
+  host, `addExports` / `addOpens` / `addReads`, and
   `enableNativeAccess` for the application and for a layer.
 
 A change to how the graph is assembled should arrive with the test that pins the behaviour it changes.
