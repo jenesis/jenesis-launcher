@@ -23,7 +23,11 @@ covers what it does, the tests and releasing. The user documentation is
 - The launcher is faithful to `java -p modulepath -cp classpath -m module/main`: one class loader hosts the
   named modules of a child `ModuleLayer` and the unnamed module of the class path, and the JDK's own rules
   (an automatic module reads the class path, a strict module does not; a module's package shadows the class
-  path) are reproduced, not improved on. A behaviour the JDK does not have is not added here.
+  path) are reproduced, not improved on. A behaviour the JDK does not have is not added here. That loader
+  is parented on the platform class loader: `java -jar` makes the outer jar the system class path, and its
+  root - the launcher, the descriptor, the jar's manifest - is no part of the two paths, so the application
+  sees none of it. An agent bundle's loader stays on the system class loader, which a `-javaagent` jar's
+  agents share with their host.
 - The jar layout and the descriptor at `META-INF/jenesis/application.properties` are the contract with the
   build tool's `Launcher` step in jenesis/jenesis and with the documentation: one `jars/<jar>/…` store, the
   descriptor's place below `META-INF/jenesis/` (never the root, where it would take the name of the

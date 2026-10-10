@@ -134,9 +134,12 @@ exploded-bundle fixtures with the JDK Class-File API and drives `Launcher#run` e
   `application.properties` read in place of the descriptor.
 - **Faithfulness to the JDK** - multi-release class and resource selection, native-library extraction, package
   metadata and sealing from the manifest, a sealing violation across class-path jars, a module class's
-  `CodeSource` location, and signer identity reconstructed from a `signature.<dep>` property.
+  `CodeSource` location, signer identity reconstructed from a `signature.<dep>` property, and an application
+  started with a real `java -jar` that sees nothing of the outer jar's root - neither the launcher's classes,
+  nor the descriptor, nor the jar's manifest - because its loader is parented on the platform class loader.
 - **Agents and grants** - `premain` in declaration order with arguments, `agentmain` on attach, an agent
-  bundle with no main started through `runAgents`, `addExports` / `addOpens` / `addReads`, and
+  bundle with no main started through `runAgents` on a loader that shares the system class loader with its
+  host, `addExports` / `addOpens` / `addReads`, and
   `enableNativeAccess` for the application and for a layer.
 
 A change to how the graph is assembled should arrive with the test that pins the behaviour it changes.
