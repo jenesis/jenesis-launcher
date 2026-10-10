@@ -32,7 +32,7 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
         registerAsParallelCapable();
     }
 
-    /** {@code application.properties} key prefix for a dependency's optional signer certificate chain. */
+    /** Descriptor key prefix for a dependency's optional signer certificate chain. */
     private static final String SIGNATURE_PREFIX = "signature.";
 
     private final Archive archive;
@@ -255,7 +255,7 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
 
     /**
      * The signer certificates to attach to a class-path dependency's {@link CodeSource}, reconstructed from
-     * an optional {@code application.properties} entry {@code signature.<dependency>} (Base64 of the signer's
+     * an optional descriptor entry {@code signature.<dependency>} (Base64 of the signer's
      * PKCS#7 certificate chain), or {@code null} when none is declared. This restores the signer identity that
      * {@link CodeSource#getCodeSigners()} / {@link CodeSource#getCertificates()} report for a dependency that
      * was a signed jar - the same attested reconstruction the loader already does for a package's manifest
