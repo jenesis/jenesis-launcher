@@ -829,9 +829,7 @@ final class TestJars {
             try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(jar.getValue()))) {
                 ZipEntry entry;
                 while ((entry = zip.getNextEntry()) != null) {
-                    if (!entry.isDirectory()) {
-                        entries.put(prefix + entry.getName(), zip.readAllBytes());
-                    }
+                    entries.put(prefix + entry.getName(), entry.isDirectory() ? new byte[0] : zip.readAllBytes());
                 }
             }
         }

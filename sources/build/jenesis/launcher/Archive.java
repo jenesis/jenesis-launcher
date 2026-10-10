@@ -467,7 +467,7 @@ final class Archive implements Closeable {
         @Override
         public URL url(String entry) {
             Path file = confine(entry);
-            if (file == null || !Files.isRegularFile(file)) {
+            if (file == null || !Files.isRegularFile(file) && !Files.isDirectory(file)) {
                 return null;
             }
             try {

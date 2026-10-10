@@ -406,6 +406,46 @@ class LauncherTest {
     }
 
     @Test
+    void servesThePackageDirectoryOfAStoredJarAsAResource() throws Exception {
+        // A class path scan (Spring's component scan among them) starts from getResource("<package>/"), which a
+        // jar answers from its directory entry, so a stored jar must keep answering it.
+        Path bundle = directory.resolve("scan-app.jar");
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("demo/", new byte[0]);
+        entries.put("demo/scan/", new byte[0]);
+        entries.put("demo/scan/Main.class", TestJars.resourceUrlMain("demo.scan.Main", "demo/scan/"));
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.scan.Main"),
+                Map.of("scan.jar", TestJars.jar(entries)),
+                Map.of());
+
+        String key = "jenesis.test.package.directory";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).startsWith("jar:").endsWith("/demo/scan/");
+    }
+
+    @Test
+    void servesThePackageDirectoryOfAnExplodedDirectoryAsAResource() throws Exception {
+        // A directory on a real class path answers getResource("<package>/") with the folder's URL; the
+        // directory layout must do the same rather than answer only regular files.
+        Path bundle = directory.resolve("dir-scan");
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("demo/dscan/Main.class", TestJars.resourceUrlMain("demo.dscan.Main", "demo/dscan/"));
+        TestJars.writeDirectory(bundle,
+                Map.of("mainClass", "demo.dscan.Main"),
+                Map.of("scan.jar", TestJars.jar(entries)),
+                Map.of());
+
+        String key = "jenesis.test.directory.package.directory";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).startsWith("file:").endsWith("/demo/dscan/");
+    }
+
+    @Test
     void confinesDirectoryResourceLookupToBundleRoot() throws Exception {
         // A secret file sits beside the exploded bundle. A class-path resource name that climbs out with
         // ".." must not read it: DirectorySource confines resolved paths to the bundle root, so the lookup
