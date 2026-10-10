@@ -9,10 +9,14 @@ import module java.base;
  * and resource is a <em>direct</em> entry:</p>
  * <pre>
  *   foo.jar
- *   |- application.properties     (mainClass, classpath, modulepath, modulepath.&lt;name&gt;, classpath.&lt;name&gt;)
- *   |- build/jenesis/launcher/... (this launcher, shaded into the jar root)
- *   '- jars/&lt;dep&gt;/...             (a dependency, exploded; what it is for the descriptor names)
+ *   |- META-INF/jenesis/application.properties (mainClass, classpath, modulepath, modulepath.&lt;name&gt;, classpath.&lt;name&gt;)
+ *   |- build/jenesis/launcher/...              (this launcher, shaded into the jar root)
+ *   '- jars/&lt;dep&gt;/...                          (a dependency, exploded; what it is for the descriptor names)
  * </pre>
+ *
+ * <p>The descriptor sits below {@code META-INF/jenesis/} rather than in the root, so it never takes the
+ * name of a resource the application carries itself - an {@code application.properties} of its own above
+ * all.</p>
  *
  * <p>A jar is stored once and may be named by more than one path, which is how a layer and the application
  * share a dependency without a second copy of it.</p>
@@ -24,11 +28,11 @@ import module java.base;
  */
 final class Archive implements Closeable {
 
-    static final String APPLICATION = "application.properties";
+    static final String APPLICATION = "META-INF/jenesis/application.properties";
     /** The one store a bundle keeps its dependencies in; what each path holds is named, not placed. */
     static final String JARS = "jars/";
     /**
-     * {@code application.properties} key prefixes naming what a layer holds on each of its two paths, by
+     * Descriptor key prefixes naming what a layer holds on each of its two paths, by
      * file name. A layer is a module graph like any other, so it splits the same way the application does:
      * what carries a module identity is resolved, and the rest is the unnamed module of the layer's own
      * loader. Which jar goes where is decided by the build and named here, never re-derived at run time.

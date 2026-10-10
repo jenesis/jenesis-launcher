@@ -13,6 +13,9 @@ import java.lang.constant.MethodTypeDesc;
  */
 final class TestJars {
 
+    /** Where an executable jar carries the descriptor the build writes and the launcher reads. */
+    static final String DESCRIPTOR = "META-INF/jenesis/application.properties";
+
     private static final ClassDesc CD_System = ClassDesc.of("java.lang.System");
     private static final ClassDesc CD_MethodHandles = ClassDesc.of("java.lang.invoke.MethodHandles");
     private static final ClassDesc CD_Lookup = ClassDesc.of("java.lang.invoke.MethodHandles$Lookup");
@@ -661,8 +664,7 @@ final class TestJars {
                             Map<String, byte[]> modulepath,
                             Map<String, Map<String, byte[]>> layers) throws IOException {
         Map<String, byte[]> entries = new LinkedHashMap<>();
-        entries.put("application.properties",
-                applicationProperties(declare(application, classpath, modulepath, layers)));
+        entries.put(DESCRIPTOR, applicationProperties(declare(application, classpath, modulepath, layers)));
         explode(entries, classpath);
         explode(entries, modulepath);
         for (Map<String, byte[]> layer : layers.values()) {
@@ -676,8 +678,8 @@ final class TestJars {
                                Map<String, String> application,
                                Map<String, byte[]> classpath,
                                Map<String, byte[]> modulepath) throws IOException {
-        Files.createDirectories(root);
-        Files.write(root.resolve("application.properties"),
+        Files.createDirectories(root.resolve(DESCRIPTOR).getParent());
+        Files.write(root.resolve(DESCRIPTOR),
                 applicationProperties(declare(application, classpath, modulepath, Map.of())));
         explodeToDirectory(root.resolve("jars"), classpath);
         explodeToDirectory(root.resolve("jars"), modulepath);

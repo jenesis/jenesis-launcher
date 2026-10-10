@@ -24,9 +24,10 @@ covers what it does, the tests and releasing. The user documentation is
   named modules of a child `ModuleLayer` and the unnamed module of the class path, and the JDK's own rules
   (an automatic module reads the class path, a strict module does not; a module's package shadows the class
   path) are reproduced, not improved on. A behaviour the JDK does not have is not added here.
-- The jar layout and the `application.properties` descriptor are the contract with the build tool's
-  `Launcher` step in jenesis/jenesis and with the documentation: one `jars/<jar>/…` store, the descriptor
-  keys (`mainClass`, `mainModule`, `classpath`, `modulepath`, `agentClass`, `addExports`, `addOpens`,
+- The jar layout and the descriptor at `META-INF/jenesis/application.properties` are the contract with the
+  build tool's `Launcher` step in jenesis/jenesis and with the documentation: one `jars/<jar>/…` store, the
+  descriptor's place below `META-INF/jenesis/` (never the root, where it would take the name of the
+  application's own file), the descriptor keys (`mainClass`, `mainModule`, `classpath`, `modulepath`, `agentClass`, `addExports`, `addOpens`,
   `addReads`, `enableNativeAccess`, `signature.<dep>`, `modulepath.<name>` and its `classpath.<name>` and
   `enableNativeAccess.<name>` counterparts, the application's own keys qualified
   by the layer's name) and the manifest attributes.
