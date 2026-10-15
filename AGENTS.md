@@ -17,9 +17,16 @@ covers what it does, the tests and releasing. The user documentation is
 
 ## How the code is written
 
-- Six classes under `sources/build/jenesis/launcher/`, Java 25 with `import module java.base;`, no
-  dependencies: the jar is shaded into other people's applications, so it must stay small and must never
-  pull a library into their class path.
+- Six classes under `sources/build/jenesis/launcher/` and the `Bridge` under its `bridge/` package, Java 25
+  with `import module java.base;`, no dependencies: the jar is shaded into other people's applications, so it
+  must stay small and must never pull a library into their class path.
+- The launcher grants itself nothing and keeps nothing that grants. Run from an executable jar, it is the
+  unnamed module of the system class loader, which every module may take a full-privilege lookup in, so
+  whatever it held - an opened package, a `ModuleLayer.Controller`, an `Instrumentation` - every module of
+  the application would hold. The agents and the main method therefore run from the `Bridge`, the one class of
+  a module the launcher defines in a layer of its own and keeps no reference to: the module exports and opens
+  nothing, is reached as the provider of a `Consumer` service, runs once, and is the only module the
+  application's packages are opened to. `LauncherAgent` hands its `Instrumentation` over once and clears it.
 - The launcher is faithful to `java -p modulepath -cp classpath -m module/main`: one class loader hosts the
   named modules of a child `ModuleLayer` and the unnamed module of the class path, and the JDK's own rules
   (an automatic module reads the class path, a strict module does not; a module's package shadows the class
