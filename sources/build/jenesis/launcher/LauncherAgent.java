@@ -22,8 +22,8 @@ import module java.instrument;
  * <ul>
  *   <li><b>Application bundle</b> ({@code mainClass} present, run as {@code java -jar foo.jar} with
  *       {@code Launcher-Agent-Class}): the JVM calls {@link #agentmain} before {@code main}; this only
- *       stashes the {@link Instrumentation}, which {@link Launcher#run} reads back through
- *       {@link #instrumentation()} and hands to the bundled agents' {@code premain} before loading the main
+ *       stashes the {@link Instrumentation}, which {@link Launcher#run} takes back through
+ *       {@link #take()} and hands to the bundled agents' {@code premain} before loading the main
  *       class.</li>
  *   <li><b>Agent bundle</b> (no {@code mainClass}, used as {@code -javaagent:foo.jar} on or attached to a
  *       host application): {@link #premain}/{@link #agentmain} enter {@link Launcher#runAgents}, which builds
@@ -33,12 +33,12 @@ import module java.instrument;
  *
  * <p>This class and {@link Launcher} are both loaded by the system class loader, so they share the static
  * field below. Without any of these manifest attributes no {@code Instrumentation} is captured and
- * {@link #instrumentation()} returns {@code null}, limiting application-bundle agents to a
+ * {@link #take()} returns {@code null}, limiting application-bundle agents to a
  * {@code premain(String)} that needs none.</p>
  */
 public final class LauncherAgent {
 
-    private static volatile Instrumentation instrumentation;
+    private static final AtomicReference<Instrumentation> CAPTURED = new AtomicReference<>();
 
     private LauncherAgent() {
     }
@@ -55,7 +55,7 @@ public final class LauncherAgent {
     }
 
     private static void start(boolean attach, String arguments, Instrumentation instrumentation) throws Exception {
-        LauncherAgent.instrumentation = instrumentation;
+        CAPTURED.set(instrumentation);
         // Resolve the bundle from this class's own code source. For an application bundle (a mainClass is
         // present) runAgents returns immediately and Launcher.run drives the agents; for an agent bundle it
         // builds the loader and runs them here. Note that this shared class can serve only ONE agent bundle
@@ -66,9 +66,12 @@ public final class LauncherAgent {
 
     /**
      * The {@link Instrumentation} captured by the JVM, or {@code null} if the jar was not launched with this
-     * class registered as its agent.
+     * class registered as its agent, or if it was taken already. Taking it clears it: this class is in the
+     * unnamed module of the system class loader whenever it runs from an executable jar, which any module may
+     * reflect into, so an {@code Instrumentation} kept here past start-up would be handed to every module of
+     * the application, and with it the power to redefine any module's encapsulation.
      */
-    static Instrumentation instrumentation() {
-        return instrumentation;
+    static Instrumentation take() {
+        return CAPTURED.getAndSet(null);
     }
 }

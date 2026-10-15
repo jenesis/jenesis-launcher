@@ -43,7 +43,7 @@ public final class Launcher {
      * {@code jenesis.*} key: those configure a build, and this one is read by the application that build
      * produced, wherever it runs and long after the build is over.
      */
-    private static final String LAYER_PATH = "jlayer.";
+    private static final String LAYER_PATH = "jlayer.", BRIDGE = "build.jenesis.launcher.bridge";
 
     private static final Map<Module, Map<String, ModuleLayer>> LAYERS = new ConcurrentHashMap<>();
 
@@ -339,12 +339,11 @@ public final class Launcher {
             throw new IllegalStateException("No 'mainClass' declared in " + Archive.APPLICATION
                     + " of " + location);
         }
-        InMemoryClassLoader loader = prepare(archive, ClassLoader.getPlatformClassLoader());
-        Thread.currentThread().setContextClassLoader(loader);
+        Prepared prepared = prepare(archive, ClassLoader.getPlatformClassLoader());
+        Thread.currentThread().setContextClassLoader(prepared.loader());
         // Run agents before the main class is loaded, mirroring `-javaagent`: a ClassFileTransformer a
         // premain registers must be in place for the JVM to apply it to the main class being defined.
-        invokeAgents("premain", LauncherAgent.instrumentation(), null, archive.application(), loader);
-        invokeMain(loader.loadClass(mainClass), args);
+        launch(prepared, "premain", LauncherAgent.take(), null, archive.application(), mainClass, args);
     }
 
     /**
@@ -365,13 +364,17 @@ public final class Launcher {
             archive.close();
             return;
         }
-        InMemoryClassLoader loader = prepare(archive, ClassLoader.getSystemClassLoader());
+        // The agents are handed the instrumentation this call was given; what LauncherAgent captured for an
+        // application's agents is not kept for an agent bundle, which has no Launcher.run to consume it.
+        LauncherAgent.take();
+        Prepared prepared = prepare(archive, ClassLoader.getSystemClassLoader());
         // Set the context loader only while the agents start, then restore it: the host application keeps
         // running on this thread afterwards and must not inherit the bundle's loader.
         ClassLoader previous = Thread.currentThread().getContextClassLoader();
-        Thread.currentThread().setContextClassLoader(loader);
+        Thread.currentThread().setContextClassLoader(prepared.loader());
         try {
-            invokeAgents(attach ? "agentmain" : "premain", instrumentation, arguments, archive.application(), loader);
+            launch(prepared, attach ? "agentmain" : "premain", instrumentation, arguments, archive.application(),
+                    null, null);
         } finally {
             Thread.currentThread().setContextClassLoader(previous);
         }
@@ -395,14 +398,14 @@ public final class Launcher {
      * when {@code modulepath} names any, they are resolved and mapped to that same loader through
      * a child {@link ModuleLayer} - so one loader hosts the named modules and the unnamed module together,
      * just as {@code java -p modulepath -cp classpath} does (automatic modules read the class path while named
-     * ones cannot, and a module shadows a same-named class-path package). Grants this launcher access to a
-     * modular main package and applies the {@code addExports}/{@code addOpens}/{@code addReads} and
-     * {@code enableNativeAccess} properties. {@code parent} is the platform class loader for an application,
+     * ones cannot, and a module shadows a same-named class-path package). Applies the
+     * {@code addExports}/{@code addOpens}/{@code addReads} and {@code enableNativeAccess} properties, and
+     * returns the layer's controller with the loader so that {@link #launch} can open the packages it runs
+     * code from to the bridge alone. {@code parent} is the platform class loader for an application,
      * which keeps the outer jar's root out of its sight, and the system class loader for an agent bundle,
      * whose agents share it with the host as {@code -javaagent} agents do.
      */
-    private static InMemoryClassLoader prepare(Archive archive, ClassLoader parent) throws Exception {
-        String mainClass = archive.application().getProperty("mainClass");
+    private static Prepared prepare(Archive archive, ClassLoader parent) throws Exception {
         String mainModule = archive.application().getProperty("mainModule");
         InMemoryClassLoader loader;
         ModuleLayer.Controller controller = null;
@@ -434,85 +437,141 @@ public final class Launcher {
         } else {
             loader = new InMemoryClassLoader(archive, null, parent);
         }
-        if (controller != null && mainModule != null && !mainModule.isBlank()
-                && mainClass != null && !mainClass.isBlank()) {
-            // Reproduce `java -m <module>/<class>`, which invokes main without requiring its package to be
-            // exported: grant this launcher access to the main package, derived from the declared module and
-            // class name so it happens before the main class is defined.
-            Module application = layer.findModule(mainModule).orElseThrow(() ->
-                    new IllegalStateException("Main module not found on the module path: " + mainModule));
-            String packageName = packageOf(mainClass);
-            if (application.getPackages().contains(packageName)) {
-                Module launcher = Launcher.class.getModule();
-                controller.addExports(application, packageName, launcher);
-                controller.addOpens(application, packageName, launcher);
-            }
-        }
         if (controller != null) {
             grantAccess(controller, layer, loader, archive.application());
         }
-        return loader;
+        return new Prepared(loader, controller);
+    }
+
+    private record Prepared(InMemoryClassLoader loader, ModuleLayer.Controller controller) {
     }
 
     /**
-     * Invokes {@code method} ({@code premain}/{@code agentmain}) on each agent named by the
-     * {@code agentClass} property, in declaration order. The value is a comma-separated list of fully
-     * qualified class names, each optionally followed by {@code =<arguments>} (mirroring
-     * {@code -javaagent:<jar>=<args>}); a directive's own arguments win, otherwise the agent gets
+     * Runs {@code method} ({@code premain}/{@code agentmain}) on each agent named by the {@code agentClass}
+     * property, in declaration order, and then the main method of {@code mainClass}, if one is named. The
+     * property is a comma-separated list of fully qualified class names, each optionally followed by
+     * {@code =<arguments>} (mirroring {@code -javaagent:jar=<arguments>}); an agent without its own takes
      * {@code defaultArguments}. The agents are loaded from the bundle's loader, so they may live on the class
      * path or the module path.
+     *
+     * <p>None of it runs from this class. The launcher is the unnamed module of the system class loader
+     * whenever it runs from an executable jar, which every module may obtain a full-privilege lookup in, so
+     * anything granted to it would be granted to all. The {@code Bridge} runs it instead, from a module of its
+     * own in a layer this method defines and keeps no reference to: the application's layer opens the
+     * packages of the agents and of the main class to that module alone, and the module exports and opens
+     * nothing. The bridge is reached as the provider of a {@link Consumer} service and runs only once.</p>
      */
-    private static void invokeAgents(String method, Instrumentation instrumentation, String defaultArguments,
-                                     Properties application, ClassLoader loader) throws Exception {
+    private static void launch(Prepared prepared, String method, Instrumentation instrumentation,
+                               String defaultArguments, Properties application, String mainClass, String[] args)
+            throws Exception {
+        List<String> agents = new ArrayList<>(), arguments = new ArrayList<>();
         String declaration = application.getProperty("agentClass");
-        if (declaration == null || declaration.isBlank()) {
-            return;
-        }
-        for (String entry : declaration.split(",")) {
-            int equals = entry.indexOf('=');
-            String className = (equals == -1 ? entry : entry.substring(0, equals)).strip();
-            String arguments = equals == -1 ? defaultArguments : entry.substring(equals + 1);
-            if (!className.isEmpty()) {
-                invokeAgent(loader.loadClass(className), method, arguments, instrumentation);
+        if (declaration != null && !declaration.isBlank()) {
+            for (String entry : declaration.split(",")) {
+                int equals = entry.indexOf('=');
+                String className = (equals == -1 ? entry : entry.substring(0, equals)).strip();
+                if (!className.isEmpty()) {
+                    agents.add(className);
+                    arguments.add(equals == -1 ? defaultArguments : entry.substring(equals + 1));
+                }
             }
         }
+        if (agents.isEmpty() && mainClass == null) {
+            return;
+        }
+        ModuleLayer bridge = bridge(prepared.controller() == null ? ModuleLayer.boot() : prepared.controller().layer());
+        Module module = bridge.findModule(BRIDGE).orElseThrow();
+        if (prepared.controller() != null) {
+            List<String> classes = new ArrayList<>(agents);
+            if (mainClass != null) {
+                classes.add(mainClass);
+            }
+            for (String className : classes) {
+                String packageName = packageOf(className);
+                for (Module holder : prepared.controller().layer().modules()) {
+                    if (holder.getPackages().contains(packageName)) {
+                        prepared.controller().addOpens(holder, packageName, module);
+                    }
+                }
+            }
+        }
+        Launcher.class.getModule().addUses(Consumer.class);
+        @SuppressWarnings("unchecked")
+        Consumer<Object[]> entry = ServiceLoader.load(bridge, Consumer.class).stream()
+                .filter(provider -> provider.type().getModule() == module)
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("The launcher's bridge provides no service"))
+                .get();
+        entry.accept(new Object[] {
+                prepared.loader(),
+                method,
+                agents.toArray(String[]::new),
+                arguments.toArray(String[]::new),
+                instrumentation,
+                mainClass,
+                args});
     }
 
-    private static void invokeAgent(Class<?> agent, String method, String arguments, Instrumentation instrumentation)
-            throws Exception {
-        // Mirror the JVM's own agent start-up: prefer <method>(String, Instrumentation), fall back to
-        // <method>(String). The two-argument form is only usable when an Instrumentation is available.
-        Method entry = instrumentation == null ? null : agentMethod(agent, method, String.class, Instrumentation.class);
-        Object[] parameters = entry == null
-                ? new Object[] {arguments}
-                : new Object[] {arguments, instrumentation};
-        if (entry == null) {
-            entry = agentMethod(agent, method, String.class);
+    /**
+     * Defines the bridge module in a layer of its own whose parent is {@code parent}: its one class, read from
+     * this jar, is the only class it holds, and its descriptor exports and opens nothing and provides the
+     * bridge as a {@link Consumer}. A copy of the class sits beside this launcher on the class path, as it is
+     * shaded with it, but there it is in the unnamed module, which no package is opened to.
+     */
+    private static ModuleLayer bridge(ModuleLayer parent) throws IOException {
+        String resource = BRIDGE.replace('.', '/') + "/Bridge.class";
+        byte[] bytes;
+        try (InputStream in = Launcher.class.getResourceAsStream("/" + resource)) {
+            if (in == null) {
+                throw new IllegalStateException("The launcher does not carry its bridge, " + resource);
+            }
+            bytes = in.readAllBytes();
         }
-        if (entry == null) {
-            throw new IllegalStateException("Agent class " + agent.getName() + " declares no static "
-                    + method + "(String) or " + method + "(String, Instrumentation) method"
-                    + (instrumentation == null
-                            ? "; without instrumentation only " + method + "(String) can run - declare"
-                              + " 'Launcher-Agent-Class: " + LauncherAgent.class.getName()
-                              + "' in the manifest to capture it"
-                            : ""));
-        }
-        entry.setAccessible(true);
-        try {
-            entry.invoke(null, parameters);
-        } catch (InvocationTargetException thrownByAgent) {
-            rethrowCause(thrownByAgent);
-        }
-    }
+        ModuleDescriptor descriptor = ModuleDescriptor.newModule(BRIDGE)
+                .requires("java.instrument")
+                .packages(Set.of(BRIDGE))
+                .provides(Consumer.class.getName(), List.of(BRIDGE + ".Bridge"))
+                .build();
+        ModuleReference reference = new ModuleReference(descriptor, null) {
+            @Override
+            public ModuleReader open() {
+                return new ModuleReader() {
+                    @Override
+                    public Optional<URI> find(String name) {
+                        return Optional.empty();
+                    }
 
-    private static Method agentMethod(Class<?> agent, String name, Class<?>... parameterTypes) {
-        try {
-            Method method = agent.getDeclaredMethod(name, parameterTypes);
-            return Modifier.isStatic(method.getModifiers()) ? method : null;
-        } catch (NoSuchMethodException absent) {
-            return null;
-        }
+                    @Override
+                    public Optional<InputStream> open(String name) {
+                        return name.equals(resource) ? Optional.of(new ByteArrayInputStream(bytes)) : Optional.empty();
+                    }
+
+                    @Override
+                    public Stream<String> list() {
+                        return Stream.of(resource);
+                    }
+
+                    @Override
+                    public void close() {
+                    }
+                };
+            }
+        };
+        ModuleFinder finder = new ModuleFinder() {
+            @Override
+            public Optional<ModuleReference> find(String name) {
+                return name.equals(BRIDGE) ? Optional.of(reference) : Optional.empty();
+            }
+
+            @Override
+            public Set<ModuleReference> findAll() {
+                return Set.of(reference);
+            }
+        };
+        java.lang.module.Configuration configuration = parent.configuration()
+                .resolve(finder, ModuleFinder.of(), Set.of(BRIDGE));
+        return ModuleLayer.defineModulesWithOneLoader(configuration, List.of(parent),
+                ClassLoader.getPlatformClassLoader()).layer();
     }
 
     private static String packageOf(String className) {
@@ -611,92 +670,6 @@ public final class Launcher {
         return layer.findModule(target)
                 .or(() -> ModuleLayer.boot().findModule(target))
                 .orElseThrow(() -> new IllegalStateException("Target module not found: " + target));
-    }
-
-    /**
-     * Invokes the main method of {@code type} as {@code java} does since JEP 512: a {@code main(String[])},
-     * else a {@code main()}, static or not, declared or inherited, and not private; an instance main runs on
-     * an instance made by the class's own non-private constructor without parameters. The JVM resolves the
-     * method, as it resolves a call, so what the class inherits - a superclass's method, an interface's default
-     * method - is found as the launcher's own finder finds it.
-     */
-    private static void invokeMain(Class<?> type, String[] args) throws Exception {
-        Launcher.class.getModule().addReads(type.getModule());
-        MethodHandles.Lookup lookup;
-        try {
-            lookup = MethodHandles.privateLookupIn(type, MethodHandles.lookup());
-        } catch (IllegalAccessException closed) {
-            throw new IllegalStateException("Cannot access the main method of " + type.getName()
-                    + "; export or open its package from the main module", closed);
-        }
-        MethodHandle main = mainMethod(lookup, type);
-        try {
-            if (main.type().parameterCount() == 0) {
-                main.invoke();
-            } else {
-                main.invoke(args);
-            }
-        } catch (Exception | Error thrownByApplication) {
-            throw thrownByApplication;
-        } catch (Throwable thrownByApplication) {
-            throw new UndeclaredThrowableException(thrownByApplication);
-        }
-    }
-
-    private static MethodHandle mainMethod(MethodHandles.Lookup lookup, Class<?> type) throws Exception {
-        for (MethodType signature : List.of(MethodType.methodType(void.class, String[].class),
-                MethodType.methodType(void.class))) {
-            MethodHandle main;
-            try {
-                main = lookup.findStatic(type, "main", signature);
-            } catch (NoSuchMethodException | IllegalAccessException _) {
-                try {
-                    main = lookup.findVirtual(type, "main", signature);
-                } catch (NoSuchMethodException | IllegalAccessException _) {
-                    continue;
-                }
-            }
-            int modifiers = lookup.revealDirect(main).getModifiers();
-            if (Modifier.isPrivate(modifiers)) {
-                continue;
-            } else if (Modifier.isStatic(modifiers)) {
-                return main;
-            } else if (Modifier.isAbstract(type.getModifiers())) {
-                throw new IllegalStateException("The main class " + type.getName() + " is abstract or an interface"
-                        + " but its main method is not static: make the class concrete, or the method static");
-            }
-            MethodHandle constructor;
-            try {
-                constructor = lookup.findConstructor(type, MethodType.methodType(void.class));
-            } catch (NoSuchMethodException _) {
-                constructor = null;
-            }
-            if (constructor == null || Modifier.isPrivate(lookup.revealDirect(constructor).getModifiers())) {
-                throw new IllegalStateException("The main class " + type.getName() + " has an instance main method"
-                        + " but no non-private constructor without parameters: declare one, declare the class"
-                        + " static if it is an inner class, or make the main method static");
-            }
-            try {
-                return main.bindTo(constructor.invoke());
-            } catch (Exception | Error thrownByConstructor) {
-                throw thrownByConstructor;
-            } catch (Throwable thrownByConstructor) {
-                throw new UndeclaredThrowableException(thrownByConstructor);
-            }
-        }
-        throw new IllegalStateException("The main class " + type.getName() + " declares or inherits no main"
-                + " method: declare a non-private void main(String[] args) or void main(), static or not");
-    }
-
-    /** Unwraps a reflective invocation failure so the cause thrown by the callee surfaces directly. */
-    private static void rethrowCause(InvocationTargetException wrapper) throws Exception {
-        Throwable cause = wrapper.getCause();
-        switch (cause) {
-            case null -> throw wrapper;
-            case Exception exception -> throw exception;
-            case Error error -> throw error;
-            default -> throw wrapper;
-        }
     }
 
     static Path location() throws URISyntaxException {
