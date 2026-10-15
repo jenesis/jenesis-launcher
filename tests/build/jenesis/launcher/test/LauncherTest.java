@@ -593,6 +593,51 @@ class LauncherTest {
     }
 
     @Test
+    void runsAnInstanceMainWithoutParametersAsJavaDoes() throws Exception {
+        String key = "jenesis.test.instance.main";
+        Path bundle = directory.resolve("instance-app.jar");
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.instance.Main", "classpath", "app.jar"),
+                Map.of("app.jar", TestJars.classJar("demo.instance.Main",
+                        TestJars.instanceMainWithoutParameters("demo.instance.Main", key, "instance"))),
+                Map.of());
+
+        System.clearProperty(key);
+        launch(bundle);
+
+        assertThat(System.getProperty(key)).isEqualTo("instance");
+    }
+
+    @Test
+    void runsAnInstanceMainOfAModuleThatExportsNoPackage() throws Exception {
+        String key = "jenesis.test.instance.modular";
+        Path bundle = directory.resolve("instance-modular-app.jar");
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.instance", "mainClass", "demo.instance.Main"),
+                Map.of(),
+                Map.of("instance.jar", TestJars.modularJar("demo.instance", "demo.instance.Main",
+                        TestJars.instanceMainWithoutParameters("demo.instance.Main", key, "modular"), Set.of(), Set.of())));
+
+        System.clearProperty(key);
+        launch(bundle);
+
+        assertThat(System.getProperty(key)).isEqualTo("modular");
+    }
+
+    @Test
+    void refusesAMainClassWhoseOnlyMainIsPrivate() throws Exception {
+        Path bundle = directory.resolve("private-main-app.jar");
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.hidden.Main", "classpath", "app.jar"),
+                Map.of("app.jar", TestJars.classJar("demo.hidden.Main", TestJars.privateMain("demo.hidden.Main"))),
+                Map.of());
+
+        assertThatThrownBy(() -> launch(bundle))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("declares or inherits no main method");
+    }
+
+    @Test
     void honorsDeclaredClassPathOrder() throws Exception {
         // Two jars both define demo.dup.Main; the `classpath` property's order decides which wins (first),
         // not the alphabetical folder name - so declaring z.jar before a.jar yields z.jar's class.
