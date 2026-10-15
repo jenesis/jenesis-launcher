@@ -150,6 +150,24 @@ final class TestJars {
         });
     }
 
+    /**
+     * A class whose {@code main} stores its own {@link Module} as the system property {@code args[0]}:
+     * {@code System.getProperties().put(args[0], Main.class.getModule())}, so that a test can ask what the
+     * module is open to once the application ran.
+     */
+    static byte[] ownModuleMain(String binaryName) {
+        ClassDesc properties = ClassDesc.of("java.util.Properties");
+        return main(binaryName, code -> code
+                .invokestatic(CD_System, "getProperties", MethodTypeDesc.of(properties))
+                .aload(0).iconst_0().aaload()
+                .loadConstant(ClassDesc.of(binaryName))
+                .invokevirtual(ConstantDescs.CD_Class, "getModule", MethodTypeDesc.of(CD_Module))
+                .invokevirtual(properties, "put",
+                        MethodTypeDesc.of(ConstantDescs.CD_Object, ConstantDescs.CD_Object, ConstantDescs.CD_Object))
+                .pop()
+                .return_());
+    }
+
     /** A class whose only {@code main(String[])} is private, which {@code java} does not run. */
     static byte[] privateMain(String binaryName) {
         return ClassFile.of().build(ClassDesc.of(binaryName), builder -> {

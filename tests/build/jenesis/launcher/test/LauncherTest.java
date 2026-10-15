@@ -625,6 +625,64 @@ class LauncherTest {
     }
 
     @Test
+    void runsTheMainClassOfAModuleTheDescriptorDoesNotNameAsMainModule() throws Exception {
+        // The package to open is found in the module of the layer that holds it, not in the module the
+        // descriptor names, so a descriptor without mainModule still reaches a main class no module exports.
+        String key = "jenesis.test.unnamed.main.module";
+        Path bundle = directory.resolve("no-main-module-app.jar");
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.closed.Main"),
+                Map.of(),
+                Map.of("closed.jar", TestJars.modularJar("demo.closed", "demo.closed.Main",
+                        TestJars.instanceMainWithoutParameters("demo.closed.Main", key, "closed"), Set.of(), Set.of())));
+
+        System.clearProperty(key);
+        launch(bundle);
+
+        assertThat(System.getProperty(key)).isEqualTo("closed");
+    }
+
+    @Test
+    void runsAnAgentOfAModuleThatExportsNothing() throws Exception {
+        String order = "jenesis.test.closed.agent.order", key = "jenesis.test.closed.agent.result";
+        Path bundle = directory.resolve("closed-agent-app.jar");
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.app.Main", "agentClass", "demo.agent.Closed"),
+                Map.of("app.jar", TestJars.classJar("demo.app.Main", TestJars.copyPropertyMain("demo.app.Main", order))),
+                Map.of("agent.jar", TestJars.modularJar("demo.agent", "demo.agent.Closed",
+                        TestJars.appendPropertyPremain("demo.agent.Closed", order, "A"), Set.of(), Set.of())));
+
+        System.clearProperty(order);
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("A");
+    }
+
+    @Test
+    void grantsTheLauncherItselfNoAccessToTheApplication() throws Exception {
+        // The launcher runs from the unnamed module of the system class loader, which any module may take a
+        // full-privilege lookup in: a package opened to it would be open to every module of the application.
+        String key = "jenesis.test.sealed.module";
+        Path bundle = directory.resolve("sealed-app.jar");
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", "demo.sealed", "mainClass", "demo.sealed.Main"),
+                Map.of(),
+                Map.of("sealed.jar", TestJars.modularJar("demo.sealed", "demo.sealed.Main",
+                        TestJars.ownModuleMain("demo.sealed.Main"), Set.of(), Set.of())));
+
+        System.getProperties().remove(key);
+        launch(bundle, key);
+
+        Module module = (Module) System.getProperties().remove(key);
+        assertThat(module.getName()).isEqualTo("demo.sealed");
+        assertThat(module.isOpen("demo.sealed", Launcher.class.getModule()))
+                .as("the main package is opened to the launcher's bridge, never to the launcher")
+                .isFalse();
+        assertThat(module.isExported("demo.sealed", Launcher.class.getModule())).isFalse();
+    }
+
+    @Test
     void refusesAMainClassWhoseOnlyMainIsPrivate() throws Exception {
         Path bundle = directory.resolve("private-main-app.jar");
         TestJars.writeBundle(bundle,
