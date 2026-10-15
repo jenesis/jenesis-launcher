@@ -129,6 +129,38 @@ final class TestJars {
     }
 
     /**
+     * A class whose instance {@code main()}, declared package-private and without parameters as JEP 512
+     * allows, runs {@code System.setProperty(key, value)}; the class has a package-private constructor.
+     */
+    static byte[] instanceMainWithoutParameters(String binaryName, String key, String value) {
+        return ClassFile.of().build(ClassDesc.of(binaryName), builder -> {
+            builder.withFlags(ClassFile.ACC_FINAL);
+            builder.withSuperclass(ConstantDescs.CD_Object);
+            builder.withMethodBody(ConstantDescs.INIT_NAME, ConstantDescs.MTD_void, 0, code -> code
+                    .aload(0)
+                    .invokespecial(ConstantDescs.CD_Object, ConstantDescs.INIT_NAME, ConstantDescs.MTD_void)
+                    .return_());
+            builder.withMethodBody("main", ConstantDescs.MTD_void, 0, code -> code
+                    .loadConstant(key)
+                    .loadConstant(value)
+                    .invokestatic(CD_System, "setProperty",
+                            MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String, ConstantDescs.CD_String))
+                    .pop()
+                    .return_());
+        });
+    }
+
+    /** A class whose only {@code main(String[])} is private, which {@code java} does not run. */
+    static byte[] privateMain(String binaryName) {
+        return ClassFile.of().build(ClassDesc.of(binaryName), builder -> {
+            builder.withFlags(ClassFile.ACC_PUBLIC | ClassFile.ACC_FINAL);
+            builder.withSuperclass(ConstantDescs.CD_Object);
+            builder.withMethodBody("main", MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_String.arrayType()),
+                    ClassFile.ACC_PRIVATE | ClassFile.ACC_STATIC, CodeBuilder::return_);
+        });
+    }
+
+    /**
      * A class whose {@code main} copies a system property into another:
      * {@code System.setProperty(args[0], System.getProperty(source))}. Used to observe, from the
      * application, a value an agent's {@code premain} wrote before {@code main} ran.

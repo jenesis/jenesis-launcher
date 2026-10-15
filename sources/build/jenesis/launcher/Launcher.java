@@ -613,23 +613,79 @@ public final class Launcher {
                 .orElseThrow(() -> new IllegalStateException("Target module not found: " + target));
     }
 
+    /**
+     * Invokes the main method of {@code type} as {@code java} does since JEP 512: a {@code main(String[])},
+     * else a {@code main()}, static or not, declared or inherited, and not private; an instance main runs on
+     * an instance made by the class's own non-private constructor without parameters. The JVM resolves the
+     * method, as it resolves a call, so what the class inherits - a superclass's method, an interface's default
+     * method - is found as the launcher's own finder finds it.
+     */
     private static void invokeMain(Class<?> type, String[] args) throws Exception {
-        Method method = type.getMethod("main", String[].class);
+        Launcher.class.getModule().addReads(type.getModule());
+        MethodHandles.Lookup lookup;
         try {
-            method.invoke(null, (Object) args);
-        } catch (IllegalAccessException notExported) {
-            // Public main in a package the module does not export: open it reflectively if allowed,
-            // otherwise tell the user to export (or open) the main package, as `java -m` requires.
-            try {
-                method.setAccessible(true);
-            } catch (RuntimeException stillClosed) {
-                throw new IllegalStateException("Cannot access " + type.getName()
-                        + ".main(String[]); export or open its package from the main module", stillClosed);
-            }
-            method.invoke(null, (Object) args);
-        } catch (InvocationTargetException thrownByApplication) {
-            rethrowCause(thrownByApplication);
+            lookup = MethodHandles.privateLookupIn(type, MethodHandles.lookup());
+        } catch (IllegalAccessException closed) {
+            throw new IllegalStateException("Cannot access the main method of " + type.getName()
+                    + "; export or open its package from the main module", closed);
         }
+        MethodHandle main = mainMethod(lookup, type);
+        try {
+            if (main.type().parameterCount() == 0) {
+                main.invoke();
+            } else {
+                main.invoke(args);
+            }
+        } catch (Exception | Error thrownByApplication) {
+            throw thrownByApplication;
+        } catch (Throwable thrownByApplication) {
+            throw new UndeclaredThrowableException(thrownByApplication);
+        }
+    }
+
+    private static MethodHandle mainMethod(MethodHandles.Lookup lookup, Class<?> type) throws Exception {
+        for (MethodType signature : List.of(MethodType.methodType(void.class, String[].class),
+                MethodType.methodType(void.class))) {
+            MethodHandle main;
+            try {
+                main = lookup.findStatic(type, "main", signature);
+            } catch (NoSuchMethodException | IllegalAccessException _) {
+                try {
+                    main = lookup.findVirtual(type, "main", signature);
+                } catch (NoSuchMethodException | IllegalAccessException _) {
+                    continue;
+                }
+            }
+            int modifiers = lookup.revealDirect(main).getModifiers();
+            if (Modifier.isPrivate(modifiers)) {
+                continue;
+            } else if (Modifier.isStatic(modifiers)) {
+                return main;
+            } else if (Modifier.isAbstract(type.getModifiers())) {
+                throw new IllegalStateException("The main class " + type.getName() + " is abstract or an interface"
+                        + " but its main method is not static: make the class concrete, or the method static");
+            }
+            MethodHandle constructor;
+            try {
+                constructor = lookup.findConstructor(type, MethodType.methodType(void.class));
+            } catch (NoSuchMethodException _) {
+                constructor = null;
+            }
+            if (constructor == null || Modifier.isPrivate(lookup.revealDirect(constructor).getModifiers())) {
+                throw new IllegalStateException("The main class " + type.getName() + " has an instance main method"
+                        + " but no non-private constructor without parameters: declare one, declare the class"
+                        + " static if it is an inner class, or make the main method static");
+            }
+            try {
+                return main.bindTo(constructor.invoke());
+            } catch (Exception | Error thrownByConstructor) {
+                throw thrownByConstructor;
+            } catch (Throwable thrownByConstructor) {
+                throw new UndeclaredThrowableException(thrownByConstructor);
+            }
+        }
+        throw new IllegalStateException("The main class " + type.getName() + " declares or inherits no main"
+                + " method: declare a non-private void main(String[] args) or void main(), static or not");
     }
 
     /** Unwraps a reflective invocation failure so the cause thrown by the callee surfaces directly. */
