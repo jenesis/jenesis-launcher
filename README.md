@@ -4,7 +4,7 @@
 ![build](https://github.com/jenesis/jenesis-launcher/actions/workflows/build.yml/badge.svg)
 
 > ### [Jenesis](https://jenesis.build) - a modern Java build tool
-> _Java-native config, plugin-free, with `module-info.java` treated as a feature, not an afterthought._
+> _Java-native config, everything the JDK provides built in, with `module-info.java` treated as a feature, not an afterthought._
 
 **A bootstrap for executable jars that keeps real Java modularity.** The launcher is shaded into the jar root
 and run as its `Main-Class`, so `java -jar foo.jar` starts the application - while modular dependencies are
