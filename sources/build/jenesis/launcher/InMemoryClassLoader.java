@@ -1,9 +1,38 @@
 package build.jenesis.launcher;
 
-import module java.base;
-
+import java.io.ByteArrayInputStream;
+import java.io.Closeable;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
+import java.lang.module.ModuleDescriptor;
+import java.lang.module.ModuleReader;
+import java.lang.module.ModuleReference;
+import java.lang.module.ResolvedModule;
+import java.net.MalformedURLException;
+import java.net.URI;
+import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.CodeSigner;
+import java.security.CodeSource;
+import java.security.ProtectionDomain;
+import java.security.cert.CertPath;
 import java.security.cert.CertificateException;
+import java.security.cert.CertificateFactory;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.Collections;
+import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.jar.Attributes;
+import java.util.jar.Manifest;
+import java.util.stream.Stream;
 
 /**
  * The single loader for every dependency in an executable jar - both the class-path jars (its
@@ -235,7 +264,7 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
                     attribute(Attributes.Name.IMPLEMENTATION_VERSION, pkg, main),
                     attribute(Attributes.Name.IMPLEMENTATION_VENDOR, pkg, main),
                     sealBase);
-        } catch (IllegalArgumentException _) {
+        } catch (IllegalArgumentException raced) {
             // Raced with another thread defining the same package; harmless.
         }
     }
@@ -284,14 +313,14 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
     }
 
     private Manifest manifest(Archive.Jar jar) {
-        return manifests.computeIfAbsent(jar.name(), _ -> {
+        return manifests.computeIfAbsent(jar.name(), name -> {
             byte[] bytes = jar.open("META-INF/MANIFEST.MF");
             if (bytes == null) {
                 return Optional.empty();
             }
             try {
                 return Optional.of(new Manifest(new ByteArrayInputStream(bytes)));
-            } catch (IOException _) {
+            } catch (IOException malformed) {
                 return Optional.empty();
             }
         }).orElse(null);
@@ -393,7 +422,7 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
         try {
             Optional<URI> uri = reader.find(name);
             return uri.isPresent() ? uri.get().toURL() : null;
-        } catch (IOException _) {
+        } catch (IOException unreadable) {
             return null;
         }
     }
@@ -434,7 +463,7 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
             try (InputStream in = stream.get()) {
                 return in.readAllBytes();
             }
-        } catch (IOException _) {
+        } catch (IOException unreadable) {
             return null;
         }
     }
@@ -459,7 +488,7 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
             String resource;
             try (Stream<String> names = entry.getValue().list()) {
                 resource = names.filter(candidate -> matchesLibrary(candidate, mapped)).findFirst().orElse(null);
-            } catch (IOException _) {
+            } catch (IOException unreadable) {
                 continue;
             }
             if (resource != null) {
