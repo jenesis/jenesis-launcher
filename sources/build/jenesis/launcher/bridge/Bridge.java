@@ -1,7 +1,15 @@
 package build.jenesis.launcher.bridge;
 
-import module java.base;
-import module java.instrument;
+import java.lang.instrument.Instrumentation;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 /**
  * Runs the bundled agents and the main method on behalf of the launcher, from a module of its own.
@@ -108,10 +116,10 @@ public final class Bridge implements Consumer<Object[]> {
             MethodHandle main;
             try {
                 main = lookup.findStatic(type, "main", signature);
-            } catch (NoSuchMethodException | IllegalAccessException _) {
+            } catch (NoSuchMethodException | IllegalAccessException noStaticMain) {
                 try {
                     main = lookup.findVirtual(type, "main", signature);
-                } catch (NoSuchMethodException | IllegalAccessException _) {
+                } catch (NoSuchMethodException | IllegalAccessException noInstanceMain) {
                     continue;
                 }
             }
@@ -127,7 +135,7 @@ public final class Bridge implements Consumer<Object[]> {
                 MethodHandle constructor;
                 try {
                     constructor = lookup.findConstructor(type, MethodType.methodType(void.class));
-                } catch (NoSuchMethodException _) {
+                } catch (NoSuchMethodException absent) {
                     constructor = null;
                 }
                 if (constructor == null || Modifier.isPrivate(lookup.revealDirect(constructor).getModifiers())) {

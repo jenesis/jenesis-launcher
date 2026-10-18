@@ -11,7 +11,7 @@
  * it declares a layer, requires this module, and asks for it by name, and the dependency is resolved into a
  * layer of its own - read from the same jar, never relocated and never unpacked.
  *
- * @jenesis.release 25
+ * @jenesis.release 11
  * @jenesis.main build.jenesis.launcher.Launcher
  */
 module build.jenesis.launcher {
