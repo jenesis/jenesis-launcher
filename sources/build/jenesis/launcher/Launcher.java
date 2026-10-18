@@ -77,8 +77,17 @@ public final class Launcher {
      */
     private static final String LAYER_PATH = "jlayer.", BRIDGE = "build.jenesis.launcher.bridge";
     private static final int FULL_PRIVILEGE = MethodHandles.Lookup.PRIVATE | MethodHandles.Lookup.MODULE;
+    private static final MethodHandle ENABLE_NATIVE_ACCESS;
 
     private static final Map<Module, Map<String, ModuleLayer>> LAYERS = new ConcurrentHashMap<>();
+
+    static {
+        try {
+            ENABLE_NATIVE_ACCESS = Runtime.version().feature() < 22 ? null : nativeAccess(MethodHandles.lookup());
+        } catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
 
     /**
      * The layer this launcher defined for the application, if it defined one. A caller on the class path is
@@ -238,7 +247,7 @@ public final class Launcher {
         }
         MethodHandle grant;
         try {
-            grant = nativeAccess(lookup);
+            grant = ENABLE_NATIVE_ACCESS == null ? null : nativeAccess(lookup);
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException("Cannot grant native access in layer " + name + " through " + lookup, e);
         }
@@ -263,11 +272,9 @@ public final class Launcher {
     }
 
     private static MethodHandle nativeAccess(MethodHandles.Lookup lookup) throws ReflectiveOperationException {
-        return Runtime.version().feature() < 22
-                ? null
-                : lookup.findVirtual(ModuleLayer.Controller.class,
-                        "enableNativeAccess",
-                        MethodType.methodType(ModuleLayer.Controller.class, Module.class));
+        return lookup.findVirtual(ModuleLayer.Controller.class,
+                "enableNativeAccess",
+                MethodType.methodType(ModuleLayer.Controller.class, Module.class));
     }
 
     /**
@@ -653,19 +660,13 @@ public final class Launcher {
                                     Properties application) {
         String nativeAccess = application.getProperty("enableNativeAccess");
         if (nativeAccess != null) {
-            MethodHandle grant;
-            try {
-                grant = nativeAccess(MethodHandles.lookup());
-            } catch (ReflectiveOperationException e) {
-                throw new IllegalStateException("Cannot grant native access to the application's modules", e);
-            }
             for (String module : nativeAccess.split(",")) {
                 String name = module.strip();
                 if (!name.isEmpty()) {
                     Module target = source(layer, name);
-                    if (grant != null) {
+                    if (ENABLE_NATIVE_ACCESS != null) {
                         try {
-                            grant.invoke(controller, target);
+                            ENABLE_NATIVE_ACCESS.invoke(controller, target);
                         } catch (RuntimeException | Error e) {
                             throw e;
                         } catch (Throwable e) {
