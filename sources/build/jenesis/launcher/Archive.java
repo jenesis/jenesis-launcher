@@ -1,6 +1,33 @@
 package build.jenesis.launcher;
 
-import module java.base;
+import java.io.ByteArrayInputStream;
+import java.io.Closeable;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
+import java.net.MalformedURLException;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.Enumeration;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.Set;
+import java.util.SortedSet;
+import java.util.TreeSet;
+import java.util.jar.Manifest;
+import java.util.stream.Stream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 /**
  * The on-demand view of an executable jar produced by Jenesis.
@@ -183,7 +210,22 @@ final class Archive implements Closeable {
     }
 
     /** What one layer holds: the modules it resolves, and the jars that are its unnamed module. */
-    record Layer(List<Jar> modulepath, List<Jar> classpath) {
+    static final class Layer {
+
+        private final List<Jar> modulepath, classpath;
+
+        Layer(List<Jar> modulepath, List<Jar> classpath) {
+            this.modulepath = modulepath;
+            this.classpath = classpath;
+        }
+
+        List<Jar> modulepath() {
+            return modulepath;
+        }
+
+        List<Jar> classpath() {
+            return classpath;
+        }
     }
 
     /**
@@ -294,7 +336,7 @@ final class Archive implements Closeable {
         if (slash <= 0 || slash == rest.length() - 1) {
             return;
         }
-        groups.computeIfAbsent(rest.substring(0, slash), _ -> new ArrayList<>())
+        groups.computeIfAbsent(rest.substring(0, slash), group -> new ArrayList<>())
                 .add(rest.substring(slash + 1));
     }
 

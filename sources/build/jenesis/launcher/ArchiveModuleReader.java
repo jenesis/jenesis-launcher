@@ -1,6 +1,13 @@
 package build.jenesis.launcher;
 
-import module java.base;
+import java.io.InputStream;
+import java.lang.module.ModuleReader;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.nio.ByteBuffer;
+import java.util.Optional;
+import java.util.stream.Stream;
 
 /**
  * A {@link ModuleReader} over an exploded module ({@link Archive.Jar}), reading entries from the still-open

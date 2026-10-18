@@ -1,6 +1,27 @@
 package build.jenesis.launcher;
 
-import module java.base;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.lang.module.ModuleDescriptor;
+import java.lang.module.ModuleFinder;
+import java.lang.module.ModuleReader;
+import java.lang.module.ModuleReference;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.URLDecoder;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.jar.Manifest;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * A {@link ModuleFinder} over the modular dependencies, resolving each exploded module on demand.
@@ -132,7 +153,7 @@ final class InMemoryModuleFinder implements ModuleFinder {
         try {
             decoded = URLDecoder.decode(name.endsWith(".jar") ? name.substring(0, name.length() - 4) : name,
                     StandardCharsets.UTF_8);
-        } catch (IllegalArgumentException _) {
+        } catch (IllegalArgumentException malformed) {
             return null;
         }
         int slash = decoded.lastIndexOf('/');
@@ -179,7 +200,7 @@ final class InMemoryModuleFinder implements ModuleFinder {
                 if (!service.isEmpty() && !providers.isEmpty()) {
                     try {
                         builder.provides(service, providers);
-                    } catch (IllegalArgumentException _) {
+                    } catch (IllegalArgumentException foreign) {
                         // Provider class outside the module's packages; skip as the JDK would.
                     }
                 }
@@ -195,7 +216,7 @@ final class InMemoryModuleFinder implements ModuleFinder {
         }
         try {
             return new Manifest(new ByteArrayInputStream(manifestBytes)).getMainAttributes().getValue(name);
-        } catch (IOException _) {
+        } catch (IOException malformed) {
             return null;
         }
     }
@@ -239,7 +260,7 @@ final class InMemoryModuleFinder implements ModuleFinder {
         String tail = name.substring(version.start() + 1);
         try {
             ModuleDescriptor.Version.parse(tail);
-        } catch (IllegalArgumentException _) {
+        } catch (IllegalArgumentException malformed) {
             return null;
         }
         return tail;

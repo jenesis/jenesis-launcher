@@ -1,7 +1,39 @@
 package build.jenesis.launcher;
 
-import module java.base;
-import module java.instrument;
+import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
+import java.lang.instrument.Instrumentation;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
+import java.lang.module.ModuleDescriptor;
+import java.lang.module.ModuleFinder;
+import java.lang.module.ModuleReader;
+import java.lang.module.ModuleReference;
+import java.lang.module.ResolvedModule;
+import java.net.MalformedURLException;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.CodeSource;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Properties;
+import java.util.ServiceLoader;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Entry point for an executable jar produced by Jenesis, and the bootstrap for using such a bundle as a
@@ -44,6 +76,7 @@ public final class Launcher {
      * produced, wherever it runs and long after the build is over.
      */
     private static final String LAYER_PATH = "jlayer.", BRIDGE = "build.jenesis.launcher.bridge";
+    private static final int FULL_PRIVILEGE = MethodHandles.Lookup.PRIVATE | MethodHandles.Lookup.MODULE;
 
     private static final Map<Module, Map<String, ModuleLayer>> LAYERS = new ConcurrentHashMap<>();
 
@@ -86,12 +119,12 @@ public final class Launcher {
      * @throws IllegalArgumentException if {@code lookup} does not have full privilege access.
      */
     public static ModuleLayer layer(MethodHandles.Lookup lookup, String name) {
-        if (!lookup.hasFullPrivilegeAccess()) {
+        if ((lookup.lookupModes() & FULL_PRIVILEGE) != FULL_PRIVILEGE) {
             throw new IllegalArgumentException("A layer is defined for the class whose lookup is passed, so the"
                     + " lookup must have full privilege access - pass MethodHandles.lookup() from the calling"
                     + " class, not " + lookup);
         }
-        return LAYERS.computeIfAbsent(lookup.lookupClass().getModule(), _ -> new ConcurrentHashMap<>())
+        return LAYERS.computeIfAbsent(lookup.lookupClass().getModule(), module -> new ConcurrentHashMap<>())
                 .computeIfAbsent(name, key -> define(lookup, key));
     }
 
@@ -121,7 +154,7 @@ public final class Launcher {
     public static <S> S instance(MethodHandles.Lookup lookup, String name, Class<S> service) {
         List<ServiceLoader.Provider<S>> providers = load(lookup, name, service)
                 .stream()
-                .toList();
+                .collect(Collectors.toUnmodifiableList());
         if (providers.isEmpty()) {
             throw new IllegalStateException("Layer " + name + " provides no " + service.getName()
                     + " - a module in the layer declares it with 'provides " + service.getSimpleName()
@@ -129,11 +162,11 @@ public final class Launcher {
         }
         if (providers.size() > 1) {
             throw new IllegalStateException("Layer " + name + " provides " + providers.size() + " of "
-                    + service.getName() + ", including " + providers.getFirst().type().getName() + " and "
+                    + service.getName() + ", including " + providers.get(0).type().getName() + " and "
                     + providers.get(1).type().getName()
                     + " - keep one, or ask for all of them with Launcher.load");
         }
-        return providers.getFirst().get();
+        return providers.get(0).get();
     }
 
     private static ModuleLayer define(MethodHandles.Lookup lookup, String name) {
@@ -171,7 +204,7 @@ public final class Launcher {
                         ClassLoader.getPlatformClassLoader());
                 loader.remote(configuration, List.of(parent));
                 return enableNativeAccess(lookup, name, archive.application().getProperty(Archive.LAYER_NATIVE_ACCESS + name),
-                        ModuleLayer.defineModules(configuration, List.of(parent), _ -> loader));
+                        ModuleLayer.defineModules(configuration, List.of(parent), moduleName -> loader));
             } catch (RuntimeException | IOException | Error e) {
                 try {
                     archive.close();
@@ -192,7 +225,7 @@ public final class Launcher {
      * {@code --enable-native-access}, which cannot name a module the boot layer does not hold. The grant is
      * made through the caller's {@code lookup}, so the JDK checks the module that asked for the layer rather
      * than this launcher: a caller without native access is warned about or refused exactly as if it had
-     * called {@link ModuleLayer.Controller#enableNativeAccess} itself, and neither a rewritten property nor
+     * called {@code ModuleLayer.Controller.enableNativeAccess} itself, and neither a rewritten property nor
      * a layer this launcher defines gives it more. A layer's class path is an unnamed module, which only
      * {@code ALL-UNNAMED} on the command line or in the manifest reaches.
      */
@@ -205,8 +238,7 @@ public final class Launcher {
         }
         MethodHandle grant;
         try {
-            grant = lookup.findVirtual(ModuleLayer.Controller.class, "enableNativeAccess",
-                    MethodType.methodType(ModuleLayer.Controller.class, Module.class));
+            grant = nativeAccess(lookup);
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException("Cannot grant native access in layer " + name + " through " + lookup, e);
         }
@@ -216,16 +248,26 @@ public final class Launcher {
                 Module target = controller.layer().findModule(module).orElseThrow(() ->
                         new IllegalStateException("Layer " + name + " holds no module " + module
                                 + " to enable native access for"));
-                try {
-                    grant.invoke(controller, target);
-                } catch (RuntimeException | Error e) {
-                    throw e;
-                } catch (Throwable e) {
-                    throw new IllegalStateException("Cannot grant native access to " + module + " in layer " + name, e);
+                if (grant != null) {
+                    try {
+                        grant.invoke(controller, target);
+                    } catch (RuntimeException | Error e) {
+                        throw e;
+                    } catch (Throwable e) {
+                        throw new IllegalStateException("Cannot grant native access to " + module + " in layer " + name, e);
+                    }
                 }
             }
         }
         return controller.layer();
+    }
+
+    private static MethodHandle nativeAccess(MethodHandles.Lookup lookup) throws ReflectiveOperationException {
+        return Runtime.version().feature() < 22
+                ? null
+                : lookup.findVirtual(ModuleLayer.Controller.class,
+                        "enableNativeAccess",
+                        MethodType.methodType(ModuleLayer.Controller.class, Module.class));
     }
 
     /**
@@ -288,7 +330,7 @@ public final class Launcher {
         return Arrays.stream(declaration.split(File.pathSeparator))
                 .filter(entry -> !entry.isBlank())
                 .map(Path::of)
-                .toList();
+                .collect(Collectors.toUnmodifiableList());
     }
 
     /**
@@ -431,7 +473,7 @@ public final class Launcher {
             // Resolve and construct the loader first: defineModules records each module's packages against
             // the loader, after which class loading may begin.
             loader = new InMemoryClassLoader(archive, finder, parent);
-            controller = ModuleLayer.defineModules(configuration, List.of(ModuleLayer.boot()), _ -> loader);
+            controller = ModuleLayer.defineModules(configuration, List.of(ModuleLayer.boot()), moduleName -> loader);
             layer = controller.layer();
             application = layer;
         } else {
@@ -443,7 +485,23 @@ public final class Launcher {
         return new Prepared(loader, controller);
     }
 
-    private record Prepared(InMemoryClassLoader loader, ModuleLayer.Controller controller) {
+    private static final class Prepared {
+
+        private final InMemoryClassLoader loader;
+        private final ModuleLayer.Controller controller;
+
+        private Prepared(InMemoryClassLoader loader, ModuleLayer.Controller controller) {
+            this.loader = loader;
+            this.controller = controller;
+        }
+
+        InMemoryClassLoader loader() {
+            return loader;
+        }
+
+        ModuleLayer.Controller controller() {
+            return controller;
+        }
     }
 
     /**
@@ -595,10 +653,25 @@ public final class Launcher {
                                     Properties application) {
         String nativeAccess = application.getProperty("enableNativeAccess");
         if (nativeAccess != null) {
+            MethodHandle grant;
+            try {
+                grant = nativeAccess(MethodHandles.lookup());
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalStateException("Cannot grant native access to the application's modules", e);
+            }
             for (String module : nativeAccess.split(",")) {
                 String name = module.strip();
                 if (!name.isEmpty()) {
-                    controller.enableNativeAccess(source(layer, name));
+                    Module target = source(layer, name);
+                    if (grant != null) {
+                        try {
+                            grant.invoke(controller, target);
+                        } catch (RuntimeException | Error e) {
+                            throw e;
+                        } catch (Throwable e) {
+                            throw new IllegalStateException("Cannot grant native access to " + name, e);
+                        }
+                    }
                 }
             }
         }
@@ -615,7 +688,27 @@ public final class Launcher {
         }
     }
 
-    private record Directive(String module, String packageName, String target) {
+    private static final class Directive {
+
+        private final String module, packageName, target;
+
+        private Directive(String module, String packageName, String target) {
+            this.module = module;
+            this.packageName = packageName;
+            this.target = target;
+        }
+
+        String module() {
+            return module;
+        }
+
+        String packageName() {
+            return packageName;
+        }
+
+        String target() {
+            return target;
+        }
     }
 
     private static List<Directive> directives(String value, boolean qualified) {

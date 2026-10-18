@@ -17,9 +17,14 @@ covers what it does, the tests and releasing. The user documentation is
 
 ## How the code is written
 
-- Six classes under `sources/build/jenesis/launcher/` and the `Bridge` under its `bridge/` package, Java 25
-  with `import module java.base;`, no dependencies: the jar is shaded into other people's applications, so it
-  must stay small and must never pull a library into their class path.
+- Six classes under `sources/build/jenesis/launcher/` and the `Bridge` under its `bridge/` package, no
+  dependencies: the jar is shaded into other people's applications, so it must stay small and must never pull
+  a library into their class path.
+- The sources compile at release 11 (`@jenesis.release 11`), so an executable jar starts on every JVM from 11
+  on and an application decides alone which release it needs. They name each import and use no record, no
+  `_` and no API newer than 11; a JVM's later capabilities, such as granting native access from Java 22 on,
+  are reached reflectively and only where the running JVM has them. Java 9 is the floor the module system
+  sets; 11 is the oldest JVM still in use. The tests are Java 25.
 - The launcher grants itself nothing and keeps nothing that grants. Run from an executable jar, it is the
   unnamed module of the system class loader, which every module may take a full-privilege lookup in, so
   whatever it held - an opened package, a `ModuleLayer.Controller`, an `Instrumentation` - every module of
