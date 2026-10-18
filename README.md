@@ -109,7 +109,7 @@ from there rather than from the application.
 
 ## Building it
 
-Requires a JDK 25 or newer (the module compiles at release 25; CI builds on 26). The build is the project's
+Requires a JDK 25 or newer to build (the module compiles at release 11, so the jars it ends up in start on Java 11 or newer; the tests are Java 25; CI builds on 26). The build is the project's
 own Java source - no wrapper, no plugins:
 
 ```bash
