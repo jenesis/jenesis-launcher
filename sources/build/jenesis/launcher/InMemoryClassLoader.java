@@ -82,7 +82,7 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
 
     InMemoryClassLoader(Archive archive, InMemoryModuleFinder finder, ClassLoader parent)
             throws IOException {
-        this(archive, archive.classpath(), finder, parent);
+        this("jenesis", archive, archive.classpath(), finder, parent);
     }
 
     /**
@@ -96,9 +96,12 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
      * version the layer exists to hide lives; deferring to it would hand the layer that very version back.
      * What the layer reads of the layers above it is reached through {@link #remote} instead.</p>
      */
-    InMemoryClassLoader(Archive archive, List<Archive.Jar> classpath, InMemoryModuleFinder finder,
+    InMemoryClassLoader(String name,
+                        Archive archive,
+                        List<Archive.Jar> classpath,
+                        InMemoryModuleFinder finder,
                         ClassLoader parent) throws IOException {
-        super("jenesis", parent);
+        super(name, parent);
         this.archive = archive;
         this.classpath = classpath;
         if (finder != null) {
