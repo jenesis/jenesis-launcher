@@ -75,7 +75,9 @@ public final class Launcher {
      * {@code jenesis.*} key: those configure a build, and this one is read by the application that build
      * produced, wherever it runs and long after the build is over.
      */
-    private static final String LAYER_PATH = "jlayer.", BRIDGE = "build.jenesis.launcher.bridge";
+    private static final String LAYER_PATH = "jlayer.",
+            LAYER = "jenesis-layer.",
+            BRIDGE = "build.jenesis.launcher.bridge";
     private static final int FULL_PRIVILEGE = MethodHandles.Lookup.PRIVATE | MethodHandles.Lookup.MODULE;
     private static final MethodHandle ENABLE_NATIVE_ACCESS;
 
@@ -202,14 +204,17 @@ public final class Launcher {
                 verify(name, configuration);
                 return enableNativeAccess(lookup, name, System.getProperty(LAYER_PATH + Archive.LAYER_NATIVE_ACCESS + name),
                         ModuleLayer.defineModulesWithOneLoader(configuration, List.of(parent),
-                                unnamed(paths(name, Archive.LAYER_CLASS_PATH))));
+                                unnamed(name, paths(name, Archive.LAYER_CLASS_PATH))));
             }
             try {
                 InMemoryModuleFinder finder = new InMemoryModuleFinder(bundled.modulepath());
                 java.lang.module.Configuration configuration = parent.configuration()
                         .resolveAndBind(finder, ModuleFinder.of(), finder.moduleNames());
                 verify(name, configuration);
-                InMemoryClassLoader loader = new InMemoryClassLoader(archive, bundled.classpath(), finder,
+                InMemoryClassLoader loader = new InMemoryClassLoader(LAYER + name,
+                        archive,
+                        bundled.classpath(),
+                        finder,
                         ClassLoader.getPlatformClassLoader());
                 loader.remote(configuration, List.of(parent));
                 return enableNativeAccess(lookup, name, archive.application().getProperty(Archive.LAYER_NATIVE_ACCESS + name),
@@ -299,11 +304,11 @@ public final class Launcher {
     }
 
     /**
-     * The loader a file-based layer's class path is read by, and the platform loader when it has none. The
-     * caller's own class path is deliberately not on this chain: a layer exists to hide the version the
-     * caller holds, so its unnamed module is its own rather than a view onto the application's.
+     * The loader a file-based layer's class path is read by, named after the layer, and the platform loader
+     * when it has none. The caller's own class path is deliberately not on this chain: a layer exists to hide
+     * the version the caller holds, so its unnamed module is its own rather than a view onto the application's.
      */
-    private static ClassLoader unnamed(List<Path> classpath) {
+    private static ClassLoader unnamed(String name, List<Path> classpath) {
         if (classpath.isEmpty()) {
             return ClassLoader.getPlatformClassLoader();
         }
@@ -315,7 +320,7 @@ public final class Launcher {
                 throw new IllegalStateException("Failed to build a URL for " + classpath.get(index), e);
             }
         }
-        return new URLClassLoader("jenesis-layer", urls, ClassLoader.getPlatformClassLoader());
+        return new URLClassLoader(LAYER + name, urls, ClassLoader.getPlatformClassLoader());
     }
 
     /**
