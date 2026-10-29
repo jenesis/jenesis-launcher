@@ -447,6 +447,57 @@ class LauncherTest {
     }
 
     @Test
+    void opensAStoredJarAsAJarOfItsOwnBehindItsResourceUrl() throws Exception {
+        // Flyway lists a class-path folder by opening the jar behind the folder's URL and filtering its entries
+        // by the folder's name, which a real class path roots at the jar. A stored jar is a folder of the outer
+        // jar, so its URL's connection must present it as a jar of its own for the scan to find anything.
+        Path bundle = directory.resolve("jar-scan-app.jar");
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("demo/", new byte[0]);
+        entries.put("demo/jscan/", new byte[0]);
+        entries.put("demo/jscan/Main.class", TestJars.jarScanMain("demo.jscan.Main", "db/migration"));
+        entries.put("db/", new byte[0]);
+        entries.put("db/migration/", new byte[0]);
+        entries.put("db/migration/V1__create.sql", "CREATE TABLE greeting (id INT);".getBytes(StandardCharsets.UTF_8));
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.jscan.Main"),
+                Map.of("migrations.jar", TestJars.jar(entries)),
+                Map.of());
+
+        String key = "jenesis.test.jar.scan";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key))
+                .as("the connection names the folder within the stored jar, and its jar lists the stored jar alone")
+                .startsWith("db/migration/|")
+                .contains("db/migration/V1__create.sql", "demo/jscan/Main.class")
+                .doesNotContain("jars/", "META-INF/jenesis/");
+    }
+
+    @Test
+    void readsAResourceRelativeToTheUrlOfAStoredJarsFolder() throws Exception {
+        // Spring scans a class-path folder and creates each match relative to the folder's URL, so a URL
+        // resolved against a stored jar's folder must open the entry it names.
+        Path bundle = directory.resolve("relative-scan-app.jar");
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("demo/rscan/Main.class", TestJars.relativeResourceMain("demo.rscan.Main", "db/migration/", "V1__create.sql"));
+        entries.put("db/", new byte[0]);
+        entries.put("db/migration/", new byte[0]);
+        entries.put("db/migration/V1__create.sql", "CREATE TABLE greeting (id INT);".getBytes(StandardCharsets.UTF_8));
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.rscan.Main"),
+                Map.of("migrations.jar", TestJars.jar(entries)),
+                Map.of());
+
+        String key = "jenesis.test.relative.scan";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("CREATE TABLE greeting (id INT);");
+    }
+
+    @Test
     void servesThePackageDirectoryOfAnExplodedDirectoryAsAResource() throws Exception {
         // A directory on a real class path answers getResource("<package>/") with the folder's URL; the
         // directory layout must do the same rather than answer only regular files.
