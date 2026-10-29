@@ -330,6 +330,26 @@ class LauncherTest {
     }
 
     @Test
+    void readsClassPathResourceThroughTheUnnamedModule() throws Exception {
+        // Module.getResourceAsStream of a class-path class asks the loader for the resource of a null module
+        // name, which the JDK's own loader answers from the class path; kotlin-reflect reads its built-ins so.
+        Path bundle = directory.resolve("unnamed-module-resource-app.jar");
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("demo/unres/Main.class", TestJars.moduleResourceMain("demo.unres.Main", "demo/unres/greeting.txt"));
+        entries.put("demo/unres/greeting.txt", "hello".getBytes(StandardCharsets.UTF_8));
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.unres.Main"),
+                Map.of("unres.jar", TestJars.jar(entries)),
+                Map.of());
+
+        String key = "jenesis.test.unnamed.module.resource";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("hello");
+    }
+
+    @Test
     void extractsNativeLibraryFromClassPathJar() throws Exception {
         // We cannot load a real library, but reaching extraction (vs. "no <name> in java.library.path")
         // proves findLibrary served it: the JVM then fails to load the bogus file and the error names the
@@ -424,6 +444,57 @@ class LauncherTest {
         launch(bundle, key);
 
         assertThat(System.getProperty(key)).startsWith("jar:").endsWith("/demo/scan/");
+    }
+
+    @Test
+    void opensAStoredJarAsAJarOfItsOwnBehindItsResourceUrl() throws Exception {
+        // Flyway lists a class-path folder by opening the jar behind the folder's URL and filtering its entries
+        // by the folder's name, which a real class path roots at the jar. A stored jar is a folder of the outer
+        // jar, so its URL's connection must present it as a jar of its own for the scan to find anything.
+        Path bundle = directory.resolve("jar-scan-app.jar");
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("demo/", new byte[0]);
+        entries.put("demo/jscan/", new byte[0]);
+        entries.put("demo/jscan/Main.class", TestJars.jarScanMain("demo.jscan.Main", "db/migration"));
+        entries.put("db/", new byte[0]);
+        entries.put("db/migration/", new byte[0]);
+        entries.put("db/migration/V1__create.sql", "CREATE TABLE greeting (id INT);".getBytes(StandardCharsets.UTF_8));
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.jscan.Main"),
+                Map.of("migrations.jar", TestJars.jar(entries)),
+                Map.of());
+
+        String key = "jenesis.test.jar.scan";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key))
+                .as("the connection names the folder within the stored jar, and its jar lists the stored jar alone")
+                .startsWith("db/migration/|")
+                .contains("db/migration/V1__create.sql", "demo/jscan/Main.class")
+                .doesNotContain("jars/", "META-INF/jenesis/");
+    }
+
+    @Test
+    void readsAResourceRelativeToTheUrlOfAStoredJarsFolder() throws Exception {
+        // Spring scans a class-path folder and creates each match relative to the folder's URL, so a URL
+        // resolved against a stored jar's folder must open the entry it names.
+        Path bundle = directory.resolve("relative-scan-app.jar");
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("demo/rscan/Main.class", TestJars.relativeResourceMain("demo.rscan.Main", "db/migration/", "V1__create.sql"));
+        entries.put("db/", new byte[0]);
+        entries.put("db/migration/", new byte[0]);
+        entries.put("db/migration/V1__create.sql", "CREATE TABLE greeting (id INT);".getBytes(StandardCharsets.UTF_8));
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.rscan.Main"),
+                Map.of("migrations.jar", TestJars.jar(entries)),
+                Map.of());
+
+        String key = "jenesis.test.relative.scan";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("CREATE TABLE greeting (id INT);");
     }
 
     @Test

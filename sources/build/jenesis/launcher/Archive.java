@@ -3,13 +3,18 @@ package build.jenesis.launcher;
 import java.io.ByteArrayInputStream;
 import java.io.Closeable;
 import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.net.JarURLConnection;
 import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
+import java.net.URLConnection;
+import java.net.URLStreamHandler;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -24,6 +29,9 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
 import java.util.jar.Manifest;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
@@ -433,14 +441,29 @@ final class Archive implements Closeable {
         return new ArrayList<>(effective);
     }
 
+    /**
+     * The outer jar. Every URL it hands out keeps the standard {@code jar:file:<jar>!/jars/<dep>/<entry>}
+     * form, so code reading the URL as text sees the entry it names, but carries a handler of its own:
+     * the {@link JarURLConnection} it opens presents the dependency as a jar of its own, rooted at
+     * {@code jars/<dep>/}, as the JDK's class path presents a jar. A scanner that lists a class-path folder
+     * by opening the jar behind its URL - Flyway lists {@code db/migration/} so - then finds the folder at
+     * the root of that jar rather than nothing, as it would in the outer jar, where the folder sits below
+     * {@code jars/<dep>/}. A URL that names no dependency, or that is rebuilt from its text, opens as a
+     * plain {@code jar:} URL on the outer jar.
+     */
     private static final class ZipSource implements Source {
 
         private final Path path;
         private final ZipFile zip;
+        private final String file;
+        private final URLStreamHandler handler = new DependencyHandler();
+        private final Map<String, DependencyJarFile> views = new ConcurrentHashMap<>();
+        private volatile Map<String, List<String>> listings;
 
         ZipSource(Path path) throws IOException {
             this.path = path.toAbsolutePath();
             this.zip = new ZipFile(this.path.toFile());
+            this.file = this.path.toUri().toString();
         }
 
         @Override
@@ -457,7 +480,7 @@ final class Archive implements Closeable {
         @Override
         public URL baseUrl(String entry) {
             try {
-                return URI.create("jar:" + path.toUri() + "!/" + encode(entry)).toURL();
+                return new URL(null, "jar:" + file + "!/" + encode(entry), handler);
             } catch (MalformedURLException e) {
                 throw new IllegalStateException("Failed to build a URL for " + entry, e);
             }
@@ -478,7 +501,61 @@ final class Archive implements Closeable {
 
         @Override
         public void close() throws IOException {
-            zip.close();
+            try {
+                for (DependencyJarFile view : views.values()) {
+                    view.close();
+                }
+            } finally {
+                zip.close();
+            }
+        }
+
+        /**
+         * The entries below each dependency's folder, directories included and named relative to it, in the
+         * order of the outer jar; read once, on the first connection that needs them.
+         */
+        private Map<String, List<String>> listings() {
+            Map<String, List<String>> listings = this.listings;
+            if (listings == null) {
+                listings = new LinkedHashMap<>();
+                Enumeration<? extends ZipEntry> entries = zip.entries();
+                while (entries.hasMoreElements()) {
+                    String name = entries.nextElement().getName();
+                    String prefix = prefix(name);
+                    if (prefix != null && name.length() > prefix.length()) {
+                        listings.computeIfAbsent(prefix, ignored -> new ArrayList<>())
+                                .add(name.substring(prefix.length()));
+                    }
+                }
+                this.listings = listings;
+            }
+            return listings;
+        }
+
+        private DependencyJarFile view(String prefix, boolean shared) throws IOException {
+            if (!shared) {
+                return new DependencyJarFile(path.toFile(), prefix, listings().getOrDefault(prefix, List.of()));
+            }
+            DependencyJarFile view = views.get(prefix);
+            if (view == null) {
+                DependencyJarFile created = view(prefix, false);
+                view = views.putIfAbsent(prefix, created);
+                if (view == null) {
+                    view = created;
+                } else {
+                    created.close();
+                }
+            }
+            return view;
+        }
+
+        /** The dependency folder {@code jars/<dep>/} that an entry name lies in, or {@code null} if none. */
+        private static String prefix(String entry) {
+            if (!entry.startsWith(JARS)) {
+                return null;
+            }
+            int slash = entry.indexOf('/', JARS.length());
+            return slash == -1 ? entry + "/" : entry.substring(0, slash + 1);
         }
 
         private static String encode(String entry) {
@@ -488,6 +565,262 @@ final class Archive implements Closeable {
                 return new URI(null, null, "/" + entry, null).getRawPath().substring(1);
             } catch (URISyntaxException e) {
                 throw new IllegalStateException("Cannot encode entry " + entry, e);
+            }
+        }
+
+        /**
+         * Opens a URL of this jar that names a dependency through a {@link DependencyConnection}, and any
+         * other as the JDK's own {@code jar:} handler does. It parses a URL relative to another as that
+         * handler does too: below the entry it names, or from the jar's root for a name starting with a
+         * slash.
+         */
+        private final class DependencyHandler extends URLStreamHandler {
+
+            @Override
+            protected URLConnection openConnection(URL url) throws IOException {
+                String spec = url.getFile();
+                int separator = spec.indexOf("!/");
+                if (separator != -1 && spec.substring(0, separator).equals(file)) {
+                    String entry = decode(spec.substring(separator + 2));
+                    String prefix = prefix(entry);
+                    if (prefix != null) {
+                        return new DependencyConnection(url, prefix, entry.length() > prefix.length()
+                                ? entry.substring(prefix.length())
+                                : null);
+                    }
+                }
+                return new URL(url.toExternalForm()).openConnection();
+            }
+
+            @Override
+            protected void parseURL(URL url, String spec, int start, int limit) {
+                String part = spec.substring(start, limit);
+                String context = url.getPath();
+                int separator = context == null ? -1 : context.indexOf("!/");
+                if (part.contains("!/") && !part.startsWith("/")) {
+                    setURL(url, "jar", null, -1, null, null, part, null, url.getRef());
+                } else if (part.startsWith("/") && separator != -1) {
+                    setURL(url, "jar", null, -1, null, null,
+                            context.substring(0, separator + 1) + part, null, url.getRef());
+                } else {
+                    super.parseURL(url, spec, start, limit);
+                }
+            }
+
+            private String decode(String entry) {
+                try {
+                    return new URI("entry:/" + entry).getPath().substring(1);
+                } catch (URISyntaxException e) {
+                    return entry;
+                }
+            }
+        }
+
+        /**
+         * A connection to an entry of one dependency, whose {@link #getJarFile()} is that dependency as a jar
+         * of its own and whose {@link #getEntryName()} and {@link #getJarEntry()} name the entry within it.
+         * As the JDK's own does, it hands out one jar per dependency while caches are in use and a jar of its
+         * own otherwise, which closes with the stream read from it or is the caller's to close.
+         */
+        private final class DependencyConnection extends JarURLConnection {
+
+            private final String prefix, entry;
+            private DependencyJarFile view;
+            private JarEntry jarEntry;
+
+            DependencyConnection(URL url, String prefix, String entry) throws MalformedURLException {
+                super(url);
+                this.prefix = prefix;
+                this.entry = entry;
+            }
+
+            @Override
+            public void connect() throws IOException {
+                if (connected) {
+                    return;
+                }
+                view = view(prefix, getUseCaches());
+                if (entry != null) {
+                    jarEntry = view.getJarEntry(entry);
+                    if (jarEntry == null) {
+                        if (!getUseCaches()) {
+                            view.close();
+                        }
+                        throw new FileNotFoundException("JAR entry " + entry + " not found in " + prefix
+                                + " of " + path);
+                    }
+                }
+                connected = true;
+            }
+
+            @Override
+            public JarFile getJarFile() throws IOException {
+                connect();
+                return view;
+            }
+
+            @Override
+            public JarEntry getJarEntry() throws IOException {
+                connect();
+                return jarEntry;
+            }
+
+            @Override
+            public String getEntryName() {
+                return entry;
+            }
+
+            @Override
+            public InputStream getInputStream() throws IOException {
+                connect();
+                if (jarEntry == null) {
+                    throw new IOException("no entry name specified");
+                }
+                InputStream in = view.getInputStream(jarEntry);
+                if (in == null) {
+                    throw new FileNotFoundException("JAR entry " + entry + " not found in " + prefix + " of " + path);
+                }
+                if (getUseCaches()) {
+                    return in;
+                }
+                DependencyJarFile owned = view;
+                return new FilterInputStream(in) {
+                    @Override
+                    public void close() throws IOException {
+                        try {
+                            super.close();
+                        } finally {
+                            owned.close();
+                        }
+                    }
+                };
+            }
+
+            @Override
+            public long getContentLengthLong() {
+                try {
+                    connect();
+                } catch (IOException e) {
+                    return -1;
+                }
+                return jarEntry == null ? -1 : jarEntry.getSize();
+            }
+
+            @Override
+            public int getContentLength() {
+                long length = getContentLengthLong();
+                return length > Integer.MAX_VALUE ? -1 : (int) length;
+            }
+
+            @Override
+            public String getContentType() {
+                String type = entry == null ? null : guessContentTypeFromName(entry);
+                return type == null ? "content/unknown" : type;
+            }
+
+            @Override
+            public long getLastModified() {
+                try {
+                    connect();
+                } catch (IOException e) {
+                    return 0;
+                }
+                return jarEntry == null ? 0 : Math.max(jarEntry.getTime(), 0);
+            }
+        }
+    }
+
+    /**
+     * One dependency of the outer jar as a jar of its own: its entries are those below {@code jars/<dep>/},
+     * named relative to it, and read on demand from the outer jar, which this file opens a second time. It
+     * is the raw jar, as a {@code jar:} URL without a {@code #runtime} fragment opens one: a multi-release
+     * dependency lists its {@code META-INF/versions/} entries as they are.
+     */
+    private static final class DependencyJarFile extends JarFile {
+
+        private final String prefix;
+        private final List<String> names;
+
+        DependencyJarFile(File file, String prefix, List<String> names) throws IOException {
+            super(file, false);
+            this.prefix = prefix;
+            this.names = names;
+        }
+
+        @Override
+        public ZipEntry getEntry(String name) {
+            ZipEntry original = super.getEntry(prefix + name);
+            if (original == null) {
+                return null;
+            }
+            JarEntry entry = new JarEntry(original.getName().substring(prefix.length()));
+            entry.setMethod(original.getMethod());
+            if (original.getTime() != -1) {
+                entry.setTime(original.getTime());
+            }
+            if (original.getSize() != -1) {
+                entry.setSize(original.getSize());
+            }
+            if (original.getCompressedSize() != -1) {
+                entry.setCompressedSize(original.getCompressedSize());
+            }
+            if (original.getCrc() != -1) {
+                entry.setCrc(original.getCrc());
+            }
+            entry.setComment(original.getComment());
+            return entry;
+        }
+
+        @Override
+        public JarEntry getJarEntry(String name) {
+            return (JarEntry) getEntry(name);
+        }
+
+        @Override
+        public Enumeration<JarEntry> entries() {
+            java.util.Iterator<String> iterator = names.iterator();
+            return new Enumeration<JarEntry>() {
+                @Override
+                public boolean hasMoreElements() {
+                    return iterator.hasNext();
+                }
+
+                @Override
+                public JarEntry nextElement() {
+                    return getJarEntry(iterator.next());
+                }
+            };
+        }
+
+        @Override
+        public Stream<JarEntry> stream() {
+            return names.stream().map(this::getJarEntry);
+        }
+
+        @Override
+        public Stream<JarEntry> versionedStream() {
+            return stream();
+        }
+
+        @Override
+        public int size() {
+            return names.size();
+        }
+
+        @Override
+        public synchronized InputStream getInputStream(ZipEntry entry) throws IOException {
+            ZipEntry original = super.getEntry(prefix + entry.getName());
+            return original == null ? null : super.getInputStream(original);
+        }
+
+        @Override
+        public Manifest getManifest() throws IOException {
+            ZipEntry manifest = super.getEntry(prefix + MANIFEST_NAME);
+            if (manifest == null) {
+                return null;
+            }
+            try (InputStream in = super.getInputStream(manifest)) {
+                return new Manifest(in);
             }
         }
     }
