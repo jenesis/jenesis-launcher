@@ -452,6 +452,114 @@ final class TestJars {
                 .return_());
     }
 
+    /**
+     * A class whose {@code main} reads {@code resource} through its own {@link Module} - as
+     * {@code getClass().getModule().getResourceAsStream(resource)}, the way kotlin-reflect reads its
+     * built-ins - and runs {@code System.setProperty(args[0], <contents>)}.
+     */
+    static byte[] moduleResourceMain(String binaryName, String resource) {
+        ClassDesc cdClass = ClassDesc.of("java.lang.Class");
+        return main(binaryName, code -> code
+                .loadConstant(ClassDesc.of(binaryName))
+                .invokevirtual(cdClass, "getModule", MethodTypeDesc.of(CD_Module))
+                .loadConstant(resource)
+                .invokevirtual(CD_Module, "getResourceAsStream",
+                        MethodTypeDesc.of(CD_InputStream, ConstantDescs.CD_String))
+                .invokevirtual(CD_InputStream, "readAllBytes",
+                        MethodTypeDesc.of(ConstantDescs.CD_byte.arrayType()))
+                .astore(1)
+                .aload(0).iconst_0().aaload()
+                .new_(ConstantDescs.CD_String)
+                .dup()
+                .aload(1)
+                .invokespecial(ConstantDescs.CD_String, ConstantDescs.INIT_NAME,
+                        MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_byte.arrayType()))
+                .invokestatic(CD_System, "setProperty",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String, ConstantDescs.CD_String))
+                .pop()
+                .return_());
+    }
+
+    /**
+     * A class whose {@code main} scans a class-path folder as Flyway does: it opens the
+     * {@link java.net.JarURLConnection} of {@code getResource(folder)} with caches off and runs
+     * {@code System.setProperty(args[0], <entry name> + "|" + <entries of its jar>)}.
+     */
+    static byte[] jarScanMain(String binaryName, String folder) {
+        ClassDesc cdConnection = ClassDesc.of("java.net.JarURLConnection");
+        ClassDesc cdUrlConnection = ClassDesc.of("java.net.URLConnection");
+        ClassDesc cdJarFile = ClassDesc.of("java.util.jar.JarFile");
+        ClassDesc cdJarEntry = ClassDesc.of("java.util.jar.JarEntry");
+        ClassDesc cdZipEntry = ClassDesc.of("java.util.zip.ZipEntry");
+        ClassDesc cdEnumeration = ClassDesc.of("java.util.Enumeration");
+        ClassDesc cdCollections = ClassDesc.of("java.util.Collections");
+        ClassDesc cdArrayList = ClassDesc.of("java.util.ArrayList");
+        ClassDesc cdBuilder = ClassDesc.of("java.lang.StringBuilder");
+        return main(binaryName, code -> code
+                .loadConstant(ClassDesc.of(binaryName))
+                .invokevirtual(ConstantDescs.CD_Class, "getClassLoader", MethodTypeDesc.of(CD_ClassLoader))
+                .loadConstant(folder)
+                .invokevirtual(CD_ClassLoader, "getResource", MethodTypeDesc.of(CD_URL, ConstantDescs.CD_String))
+                .invokevirtual(CD_URL, "openConnection", MethodTypeDesc.of(cdUrlConnection))
+                .checkcast(cdConnection)
+                .astore(1)
+                .aload(1)
+                .iconst_0()
+                .invokevirtual(cdUrlConnection, "setUseCaches", MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_boolean))
+                .aload(0).iconst_0().aaload()
+                .new_(cdBuilder)
+                .dup()
+                .invokespecial(cdBuilder, ConstantDescs.INIT_NAME, MethodTypeDesc.of(ConstantDescs.CD_void))
+                .aload(1)
+                .invokevirtual(cdConnection, "getJarEntry", MethodTypeDesc.of(cdJarEntry))
+                .invokevirtual(cdZipEntry, "getName", MethodTypeDesc.of(ConstantDescs.CD_String))
+                .invokevirtual(cdBuilder, "append", MethodTypeDesc.of(cdBuilder, ConstantDescs.CD_String))
+                .loadConstant("|")
+                .invokevirtual(cdBuilder, "append", MethodTypeDesc.of(cdBuilder, ConstantDescs.CD_String))
+                .aload(1)
+                .invokevirtual(cdConnection, "getJarFile", MethodTypeDesc.of(cdJarFile))
+                .invokevirtual(cdJarFile, "entries", MethodTypeDesc.of(cdEnumeration))
+                .invokestatic(cdCollections, "list", MethodTypeDesc.of(cdArrayList, cdEnumeration))
+                .invokevirtual(cdBuilder, "append", MethodTypeDesc.of(cdBuilder, ConstantDescs.CD_Object))
+                .invokevirtual(cdBuilder, "toString", MethodTypeDesc.of(ConstantDescs.CD_String))
+                .invokestatic(CD_System, "setProperty",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String, ConstantDescs.CD_String))
+                .pop()
+                .return_());
+    }
+
+    /**
+     * A class whose {@code main} reads {@code file} through a URL resolved against {@code getResource(folder)},
+     * as Spring creates a resource relative to the folder it scanned, and runs
+     * {@code System.setProperty(args[0], <contents>)}.
+     */
+    static byte[] relativeResourceMain(String binaryName, String folder, String file) {
+        return main(binaryName, code -> code
+                .new_(CD_URL)
+                .dup()
+                .loadConstant(ClassDesc.of(binaryName))
+                .invokevirtual(ConstantDescs.CD_Class, "getClassLoader", MethodTypeDesc.of(CD_ClassLoader))
+                .loadConstant(folder)
+                .invokevirtual(CD_ClassLoader, "getResource", MethodTypeDesc.of(CD_URL, ConstantDescs.CD_String))
+                .loadConstant(file)
+                .invokespecial(CD_URL, ConstantDescs.INIT_NAME,
+                        MethodTypeDesc.of(ConstantDescs.CD_void, CD_URL, ConstantDescs.CD_String))
+                .invokevirtual(CD_URL, "openStream", MethodTypeDesc.of(CD_InputStream))
+                .invokevirtual(CD_InputStream, "readAllBytes",
+                        MethodTypeDesc.of(ConstantDescs.CD_byte.arrayType()))
+                .astore(1)
+                .aload(0).iconst_0().aaload()
+                .new_(ConstantDescs.CD_String)
+                .dup()
+                .aload(1)
+                .invokespecial(ConstantDescs.CD_String, ConstantDescs.INIT_NAME,
+                        MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_byte.arrayType()))
+                .invokestatic(CD_System, "setProperty",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String, ConstantDescs.CD_String))
+                .pop()
+                .return_());
+    }
+
     /** A class whose {@code main} runs {@code System.loadLibrary(library)}. */
     static byte[] loadLibraryMain(String binaryName, String library) {
         return main(binaryName, code -> code
