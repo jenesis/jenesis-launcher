@@ -345,6 +345,16 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
     @Override
     protected URL findResource(String moduleName, String name) throws IOException {
         if (moduleName == null) {
+            // The unnamed module is the class path, which is all a null module name asks for: the JDK's
+            // own application loader answers it from the class path alone, without the named modules
+            // that findResource(String) consults first. Module.getResourceAsStream of a class-path class
+            // arrives here, as kotlin-reflect reads its built-ins.
+            for (Archive.Jar jar : classpath) {
+                URL url = jar.url(name);
+                if (url != null) {
+                    return url;
+                }
+            }
             return null;
         }
         ModuleReader reader = readers.get(moduleName);

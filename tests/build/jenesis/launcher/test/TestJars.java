@@ -452,6 +452,35 @@ final class TestJars {
                 .return_());
     }
 
+    /**
+     * A class whose {@code main} reads {@code resource} through its own {@link Module} - as
+     * {@code getClass().getModule().getResourceAsStream(resource)}, the way kotlin-reflect reads its
+     * built-ins - and runs {@code System.setProperty(args[0], <contents>)}.
+     */
+    static byte[] moduleResourceMain(String binaryName, String resource) {
+        ClassDesc cdClass = ClassDesc.of("java.lang.Class");
+        ClassDesc cdModule = ClassDesc.of("java.lang.Module");
+        return main(binaryName, code -> code
+                .loadConstant(ClassDesc.of(binaryName))
+                .invokevirtual(cdClass, "getModule", MethodTypeDesc.of(cdModule))
+                .loadConstant(resource)
+                .invokevirtual(cdModule, "getResourceAsStream",
+                        MethodTypeDesc.of(CD_InputStream, ConstantDescs.CD_String))
+                .invokevirtual(CD_InputStream, "readAllBytes",
+                        MethodTypeDesc.of(ConstantDescs.CD_byte.arrayType()))
+                .astore(1)
+                .aload(0).iconst_0().aaload()
+                .new_(ConstantDescs.CD_String)
+                .dup()
+                .aload(1)
+                .invokespecial(ConstantDescs.CD_String, ConstantDescs.INIT_NAME,
+                        MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_byte.arrayType()))
+                .invokestatic(CD_System, "setProperty",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String, ConstantDescs.CD_String))
+                .pop()
+                .return_());
+    }
+
     /** A class whose {@code main} runs {@code System.loadLibrary(library)}. */
     static byte[] loadLibraryMain(String binaryName, String library) {
         return main(binaryName, code -> code

@@ -330,6 +330,26 @@ class LauncherTest {
     }
 
     @Test
+    void readsClassPathResourceThroughTheUnnamedModule() throws Exception {
+        // Module.getResourceAsStream of a class-path class asks the loader for the resource of a null module
+        // name, which the JDK's own loader answers from the class path; kotlin-reflect reads its built-ins so.
+        Path bundle = directory.resolve("unnamed-module-resource-app.jar");
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("demo/unres/Main.class", TestJars.moduleResourceMain("demo.unres.Main", "demo/unres/greeting.txt"));
+        entries.put("demo/unres/greeting.txt", "hello".getBytes(StandardCharsets.UTF_8));
+        TestJars.writeBundle(bundle,
+                Map.of("mainClass", "demo.unres.Main"),
+                Map.of("unres.jar", TestJars.jar(entries)),
+                Map.of());
+
+        String key = "jenesis.test.unnamed.module.resource";
+        System.clearProperty(key);
+        launch(bundle, key);
+
+        assertThat(System.getProperty(key)).isEqualTo("hello");
+    }
+
+    @Test
     void extractsNativeLibraryFromClassPathJar() throws Exception {
         // We cannot load a real library, but reaching extraction (vs. "no <name> in java.library.path")
         // proves findLibrary served it: the JVM then fails to load the bogus file and the error names the
