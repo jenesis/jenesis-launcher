@@ -26,6 +26,14 @@ final class ArchiveModuleReader implements ModuleReader {
         this.jar = jar;
     }
 
+    /**
+     * The entry's URL as the archive hands it out, which a stored jar opens as a jar of its own; a URL made
+     * from {@link #find(String)} through {@link URI#toURL()} opens on the outer jar instead.
+     */
+    URL url(String name) {
+        return jar.url(name);
+    }
+
     @Override
     public Optional<URI> find(String name) {
         URL url = jar.url(name);

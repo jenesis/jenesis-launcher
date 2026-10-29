@@ -89,6 +89,12 @@ covers what it does, the tests and releasing. The user documentation is
   calling module; the launcher itself grants only the application's own modules.
 - Bytes are read from the still-open jar on demand; nothing is merged, held in memory, or extracted, except
   a native library that the JVM can only load from a file.
+- A resource URL keeps the `jar:file:<jar>!/jars/<jar>/<entry>` text that names its entry in the outer jar,
+  for code that reads the URL as text, while its connection presents the stored jar as a jar of its own,
+  rooted at its folder, for code that opens the jar behind the URL - as the JDK's class path presents each
+  jar. A scanner that lists a class-path folder from `JarURLConnection.getJarFile()` - Flyway its
+  migrations - thereby finds what it finds on a class path. A URL rebuilt from its text opens on the outer
+  jar, through the JDK's own handler.
 
 ## Tests
 

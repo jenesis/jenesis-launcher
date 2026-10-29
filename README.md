@@ -128,8 +128,9 @@ exploded-bundle fixtures with the JDK Class-File API and drives `Launcher#run` e
 
 - **Layout and loading** - class-path and modular applications, automatic-module naming, declared class-path
   order, a rejected duplicate module name, split-package shadowing, and a strict module's non-exported main.
-- **Resources** - `jar:` and `file:` URLs from both a jar and an exploded directory, names confined to the
-  bundle root, a bundle path with spaces, `getResources` across a module and the class path, module
+- **Resources** - `jar:` and `file:` URLs from both a jar and an exploded directory, a stored jar opened as a jar
+  of its own behind its resource URLs, a class-path resource read through its unnamed module, names confined to
+  the bundle root, a bundle path with spaces, `getResources` across a module and the class path, module
   resources honouring encapsulation (a non-open package's resource stays hidden), and an application's own
   `application.properties` read in place of the descriptor.
 - **Faithfulness to the JDK** - multi-release class and resource selection, native-library extraction, package

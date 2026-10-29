@@ -362,7 +362,15 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
             return null;
         }
         // The Module/Class layer has already gated encapsulation before calling this, so serve whatever the
-        // reader has; its find() yields a jar:/file: URI that the JDK's own handlers open.
+        // reader has.
+        return url(reader, name);
+    }
+
+    /** The URL of a module's entry: the archive's own for a bundled module, else what its reader finds. */
+    private static URL url(ModuleReader reader, String name) throws IOException {
+        if (reader instanceof ArchiveModuleReader) {
+            return ((ArchiveModuleReader) reader).url(name);
+        }
         Optional<URI> uri = reader.find(name);
         return uri.isPresent() ? uri.get().toURL() : null;
     }
@@ -433,8 +441,7 @@ final class InMemoryClassLoader extends ClassLoader implements Closeable {
             return null;
         }
         try {
-            Optional<URI> uri = reader.find(name);
-            return uri.isPresent() ? uri.get().toURL() : null;
+            return url(reader, name);
         } catch (IOException unreadable) {
             return null;
         }
