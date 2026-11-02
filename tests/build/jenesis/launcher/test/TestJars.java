@@ -52,6 +52,28 @@ final class TestJars {
                 .return_());
     }
 
+    /**
+     * A class whose {@code main} runs {@code System.setProperty(args[0], String.valueOf(new TreeSet<>(packages)))},
+     * where {@code packages} are those of its own module.
+     */
+    static byte[] modulePackagesMain(String binaryName) {
+        ClassDesc treeSet = ClassDesc.of("java.util.TreeSet");
+        return main(binaryName, code -> code
+                .aload(0).iconst_0().aaload()
+                .new_(treeSet).dup()
+                .ldc(ClassDesc.of(binaryName))
+                .invokevirtual(ConstantDescs.CD_Class, "getModule", MethodTypeDesc.of(CD_Module))
+                .invokevirtual(CD_Module, "getPackages", MethodTypeDesc.of(ConstantDescs.CD_Set))
+                .invokespecial(treeSet, ConstantDescs.INIT_NAME,
+                        MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_Collection))
+                .invokestatic(ConstantDescs.CD_String, "valueOf",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_Object))
+                .invokestatic(CD_System, "setProperty",
+                        MethodTypeDesc.of(ConstantDescs.CD_String, ConstantDescs.CD_String, ConstantDescs.CD_String))
+                .pop()
+                .return_());
+    }
+
     /** A class whose {@code main} runs {@code System.setProperty(args[0], args[1])}. */
     static byte[] setPropertyMain(String binaryName) {
         return main(binaryName, code -> code

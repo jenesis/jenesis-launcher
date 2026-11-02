@@ -12,6 +12,7 @@ import java.net.URLDecoder;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -49,6 +50,13 @@ final class InMemoryModuleFinder implements ModuleFinder {
     private static final Pattern DASH_VERSION = Pattern.compile("-(\\d+(\\.|$))");
     private static final Pattern NON_ALPHANUMERIC = Pattern.compile("[^A-Za-z0-9]");
     private static final Pattern REPEATING_DOTS = Pattern.compile("\\.{2,}");
+    private static final Set<String> RESERVED = new HashSet<>(Arrays.asList(
+            "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char", "class", "const",
+            "continue", "default", "do", "double", "else", "enum", "extends", "final", "finally", "float",
+            "for", "goto", "if", "implements", "import", "instanceof", "int", "interface", "long", "native",
+            "new", "package", "private", "protected", "public", "return", "short", "static", "strictfp",
+            "super", "switch", "synchronized", "this", "throw", "throws", "transient", "try", "void",
+            "volatile", "while", "true", "false", "null", "_"));
 
     private final Map<String, ModuleReference> references = new LinkedHashMap<>();
 
@@ -161,11 +169,10 @@ final class InMemoryModuleFinder implements ModuleFinder {
     }
 
     private static ModuleReference reference(Archive.Jar jar, String alias) {
-        Set<String> packages = packages(jar.names());
         byte[] moduleInfo = jar.open("module-info.class");
         ModuleDescriptor descriptor = moduleInfo != null
-                ? ModuleDescriptor.read(ByteBuffer.wrap(moduleInfo), () -> packages)
-                : automatic(jar, packages, alias);
+                ? ModuleDescriptor.read(ByteBuffer.wrap(moduleInfo), () -> packages(jar.names(), true))
+                : automatic(jar, packages(jar.names(), false), alias);
         // The module's location is its exploded folder URL, so a class the loader defines from it carries a
         // CodeSource pointing there - as a real module-path class does. Resources are still served through
         // the reader's own jar:/file: URLs, not this location.
@@ -266,10 +273,18 @@ final class InMemoryModuleFinder implements ModuleFinder {
         return tail;
     }
 
-    private static Set<String> packages(List<String> names) {
+    /**
+     * The packages a module path finds in a jar, as {@code ModulePath} derives them: for an explicit module
+     * whose descriptor records none, every folder holding an entry, so a package of resources alone - native
+     * libraries, templates - is part of the module and can be opened; for an automatic module only the folders
+     * holding class files. A folder whose name is no package name, such as a reserved word, is no package.
+     */
+    private static Set<String> packages(List<String> names, boolean resources) {
         Set<String> packages = new HashSet<>();
         for (String name : names) {
-            if (!name.endsWith(".class") || name.equals("module-info.class") || name.startsWith("META-INF/")) {
+            if (!resources && !name.endsWith(".class")
+                    || name.equals("module-info.class")
+                    || name.startsWith("META-INF/")) {
                 continue;
             }
             int slash = name.lastIndexOf('/');
@@ -288,7 +303,7 @@ final class InMemoryModuleFinder implements ModuleFinder {
         int start = 0;
         for (int index = 0; index <= name.length(); index++) {
             if (index == name.length() || name.charAt(index) == '.') {
-                if (index == start) {
+                if (index == start || RESERVED.contains(name.substring(start, index))) {
                     return false;
                 }
                 if (!Character.isJavaIdentifierStart(name.charAt(start))) {
