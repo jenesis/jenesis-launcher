@@ -147,6 +147,55 @@ class LauncherTest {
     }
 
     @Test
+    void countsAPackageOfResourcesAloneAsPartOfAnExplicitModule() throws Exception {
+        // A module path reads every folder of an explicit module as a package, so a folder holding nothing
+        // but a native library is part of the module and can be opened. A folder named by a reserved word,
+        // the jar's root and META-INF are no package, here as there.
+        Map<String, byte[]> entries = resourcePackages();
+        entries.put("module-info.class", TestJars.moduleInfo("demo.widgets"));
+        assertThat(launchedPackages("explicit-resources", entries, "demo.widgets"))
+                .isEqualTo("[demo.widgets, demo.widgets.linux.amd64]")
+                .isEqualTo(String.valueOf(new TreeSet<>(onModulePath("explicit-resources", entries))));
+    }
+
+    @Test
+    void countsOnlyPackagesOfClassesAsPartOfAnAutomaticModule() throws Exception {
+        // A module path derives the packages of an automatic module from its class files alone.
+        Map<String, byte[]> entries = resourcePackages();
+        assertThat(launchedPackages("widgets", entries, "widgets"))
+                .isEqualTo("[demo.widgets]")
+                .isEqualTo(String.valueOf(new TreeSet<>(onModulePath("widgets", entries))));
+    }
+
+    private static Map<String, byte[]> resourcePackages() {
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("demo/widgets/Main.class", TestJars.modulePackagesMain("demo.widgets.Main"));
+        entries.put("demo/widgets/linux/amd64/libwidgets.so", new byte[]{1});
+        entries.put("demo/widgets/static/index.html", new byte[]{1});
+        entries.put("readme.txt", new byte[]{1});
+        entries.put("META-INF/widgets/notice.txt", new byte[]{1});
+        return entries;
+    }
+
+    private String launchedPackages(String name, Map<String, byte[]> entries, String module) throws Exception {
+        Path bundle = directory.resolve(name + "-app.jar");
+        TestJars.writeBundle(bundle,
+                Map.of("mainModule", module, "mainClass", "demo.widgets.Main"),
+                Map.of(),
+                Map.of(name + ".jar", TestJars.jar(entries)));
+        String key = "jenesis.test.packages." + name;
+        System.clearProperty(key);
+        launch(bundle, key);
+        return System.getProperty(key);
+    }
+
+    private Set<String> onModulePath(String name, Map<String, byte[]> entries) throws IOException {
+        Path folder = Files.createDirectories(directory.resolve("module-path-" + name));
+        Files.write(folder.resolve(name + ".jar"), TestJars.jar(entries));
+        return ModuleFinder.of(folder).findAll().iterator().next().descriptor().packages();
+    }
+
+    @Test
     void resolvesRequiredModuleForExplicitModularMain() throws Exception {
         // An explicit main module that `requires` a named library, with no automatic module present. The
         // launcher roots only the main module (faithful `java -m`); the library is still resolved - and
